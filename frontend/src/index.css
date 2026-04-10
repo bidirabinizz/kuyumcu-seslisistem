@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --gold: #F59E0B;
+  --gold-light: #FCD34D;
+  --ink-900: #0E0D0B;
+  --ink-800: #1A1814;
+  --ink-700: #2A2722;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background-color: #F8F7F4;
+  font-family: 'DM Sans', sans-serif;
+  color: #1A1814;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D5D2CC; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #B0ACA4; }
+
+/* Gold shimmer effect on cards */
+.gold-shimmer {
+  background: linear-gradient(
+    105deg,
+    #1A1814 0%,
+    #2A2722 25%,
+    #3D3933 45%,
+    #92400E 55%,
+    #D97706 60%,
+    #F59E0B 65%,
+    #D97706 70%,
+    #3D3933 80%,
+    #2A2722 90%,
+    #1A1814 100%
+  );
+  background-size: 200% auto;
+}
+
+.animate-shimmer-bg {
+  animation: shimmer 3s linear infinite;
+  background-size: 200% auto;
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+/* Table row enter animation */
+.row-enter {
+  animation: fadeUp 0.35s ease forwards;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Sidebar active glow */
+.nav-active-glow {
+  box-shadow: inset 4px 0 0 #F59E0B;
+  background: linear-gradient(90deg, rgba(245,158,11,0.08) 0%, transparent 100%);
+}
+
+/* Stat card hover */
+.stat-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.08);
+}
