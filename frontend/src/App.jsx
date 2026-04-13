@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import { Sidebar }      from './components/Sidebar';
+import { LiveTicker }   from './components/LiveTicker';
 import { Dashboard }    from './pages/Dashboard';
 import { Kullanicilar } from './pages/Kullanicilar';
 import { Raporlar }     from './pages/Raporlar';
@@ -31,6 +32,7 @@ export default function App() {
           </div>
 
           {/* Main content */}
+          <LiveTicker />
           <main className="flex-1 overflow-y-auto">
             <Routes>
               <Route path="/"              element={<Dashboard />}    />

@@ -1,41 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, TrendingUp, TrendingDown, BarChart2, Calendar, Filter, ChevronDown } from 'lucide-react';
 
-// ─── Demo veri üretici ───────────────────────────────────────────────────────
 const AYARLAR = ['24_AYAR', '22_AYAR', '18_AYAR', '14_AYAR'];
 const AYAR_LABEL = { '24_AYAR': '24 Ayar', '22_AYAR': '22 Ayar', '18_AYAR': '18 Ayar', '14_AYAR': '14 Ayar' };
-const AYAR_MILYEM = { '24_AYAR': 1.0, '22_AYAR': 0.916, '18_AYAR': 0.75, '14_AYAR': 0.585 };
-const PERSONELLER = ['Ahmet Çapar', 'Zeynep Yılmaz'];
-
-function demoVeri() {
-  const rows = [];
-  const bugun = new Date();
-  for (let d = 29; d >= 0; d--) {
-    const tarih = new Date(bugun);
-    tarih.setDate(bugun.getDate() - d);
-    const tarihStr = tarih.toLocaleDateString('tr-TR');
-    const islemSayisi = 2 + Math.floor(Math.random() * 6);
-    for (let i = 0; i < islemSayisi; i++) {
-      const ayar  = AYARLAR[Math.floor(Math.random() * AYARLAR.length)];
-      const tip   = Math.random() > 0.45 ? 'ALIS' : 'SATIS';
-      const brut  = +(2 + Math.random() * 28).toFixed(2);
-      const has   = +(brut * AYAR_MILYEM[ayar]).toFixed(3);
-      rows.push({
-        tarih: tarihStr,
-        tarihObj: new Date(tarih),
-        tip,
-        ayar,
-        personel: PERSONELLER[Math.floor(Math.random() * PERSONELLER.length)],
-        brut,
-        has,
-        saat: `${8 + Math.floor(Math.random()*10)}:${String(Math.floor(Math.random()*60)).padStart(2,'0')}`,
-      });
-    }
-  }
-  return rows.sort((a, b) => b.tarihObj - a.tarihObj);
-}
-
-const TUM_ISLEMLER = demoVeri();
+const API_BASE = 'http://localhost:8000';
 
 // ─── Mini bar chart (saf SVG, kütüphane yok) ─────────────────────────────────
 const MiniBarChart = ({ data, renk }) => {
@@ -112,17 +80,71 @@ export const Raporlar = () => {
   const [aralik, setAralik]   = useState('30');
   const [tip, setTip]         = useState('');
   const [personel, setPersonel] = useState('');
+  const [islemler, setIslemler] = useState([]);
+  const [personeller, setPersoneller] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [hata, setHata] = useState('');
+
+  const islemGetir = async () => {
+    try {
+      setLoading(true);
+      setHata('');
+      const params = new URLSearchParams({ gunler: aralik });
+      if (tip) params.set('tip', tip);
+      if (personel) params.set('personel_id', personel);
+
+      const res = await fetch(`${API_BASE}/islemler?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'İşlemler yüklenemedi.');
+      }
+      setIslemler(data);
+    } catch (err) {
+      setHata(err.message || 'İşlemler yüklenemedi.');
+      setIslemler([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const personelGetir = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/personeller`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Personeller yüklenemedi.');
+      }
+      setPersoneller(data);
+    } catch (_) {
+      setPersoneller([]);
+    }
+  };
+
+  useEffect(() => {
+    personelGetir();
+  }, []);
+
+  useEffect(() => {
+    islemGetir();
+  }, [aralik, tip, personel]);
 
   const filtrelenmis = useMemo(() => {
-    const sinir = new Date();
-    sinir.setDate(sinir.getDate() - parseInt(aralik));
-    return TUM_ISLEMLER.filter(r => {
-      if (r.tarihObj < sinir) return false;
-      if (tip && r.tip !== tip) return false;
-      if (personel && r.personel !== personel) return false;
-      return true;
+    return islemler.map((r) => {
+      const tarihObj = r.islem_tarihi ? new Date(r.islem_tarihi) : null;
+      return {
+        id: r.id,
+        tarih: tarihObj ? tarihObj.toLocaleDateString('tr-TR') : '—',
+        tarihObj,
+        saat: tarihObj ? tarihObj.toLocaleTimeString('tr-TR') : '—',
+        tip: r.islem_tipi,
+        ayar: r.urun_cinsi,
+        personel: r.personel_ad_soyad || 'Bilinmiyor',
+        brut: Number(r.brut_miktar || 0),
+        has: Number(r.net_has_miktar || 0),
+        birim_fiyat: Number(r.birim_fiyat || 0),
+      };
     });
-  }, [aralik, tip, personel]);
+  }, [islemler]);
 
   // KPI hesapları
   const toplamAlis  = filtrelenmis.filter(r => r.tip === 'ALIS').reduce((s, r) => s + r.has, 0);
@@ -147,7 +169,12 @@ export const Raporlar = () => {
     deger: filtrelenmis.filter(r => r.ayar === ayar).reduce((s, r) => s + r.has, 0),
   }));
 
-  const exportPDF = () => window.open('http://localhost:8000/rapor/pdf', '_blank');
+  const exportPDF = () => {
+    const params = new URLSearchParams({ gunler: aralik });
+    if (tip) params.set('tip', tip);
+    if (personel) params.set('personel_id', personel);
+    window.open(`http://localhost:8000/rapor/pdf?${params.toString()}`, '_blank');
+  };
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
@@ -201,11 +228,26 @@ export const Raporlar = () => {
             onChange={e => setPersonel(e.target.value)}
           >
             <option value="">Tüm Personeller</option>
-            {PERSONELLER.map(p => <option key={p}>{p}</option>)}
+            {personeller.map(p => (
+              <option key={p.id} value={String(p.id)}>
+                {p.ad_soyad}
+              </option>
+            ))}
           </select>
           <ChevronDown size={12} className="absolute right-3 text-ink-400 pointer-events-none" />
         </div>
       </div>
+
+      {hata && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
+          {hata}
+        </div>
+      )}
+      {loading && (
+        <div className="mb-4 rounded-xl border border-ink-200 bg-ink-50 px-4 py-2 text-sm font-semibold text-ink-600">
+          Rapor verileri yükleniyor...
+        </div>
+      )}
 
       {/* KPI kartları */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -276,8 +318,8 @@ export const Raporlar = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-ink-50">
-              {filtrelenmis.slice(0, 50).map((r, idx) => (
-                <tr key={idx} className="hover:bg-ink-50/50 transition-colors">
+              {filtrelenmis.slice(0, 50).map((r) => (
+                <tr key={r.id} className="hover:bg-ink-50/50 transition-colors">
                   <td className="px-5 py-3 text-xs font-mono text-ink-600">{r.tarih}</td>
                   <td className="px-5 py-3 text-xs font-mono text-ink-400">{r.saat}</td>
                   <td className="px-5 py-3 text-sm font-medium text-ink-700">{r.personel}</td>

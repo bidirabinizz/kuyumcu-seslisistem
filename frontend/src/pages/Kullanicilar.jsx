@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { UserPlus, Shield, Mic, Edit2, Trash2, X, Check } from 'lucide-react';
 
 const ROL_BADGE = {
@@ -8,26 +8,78 @@ const ROL_BADGE = {
 };
 
 const BOSTA_PERSONEL = { ad_soyad: '', tetikleme_kelimesi: '', rol: 'Tezgahtar' };
+const API_BASE = 'http://localhost:8000';
 
 export const Kullanicilar = () => {
-  const [personeller, setPersoneller] = useState([
-    { id: 1, ad_soyad: 'Ahmet Çapar',   tetikleme_kelimesi: 'ahmet',  rol: 'Yönetici'  },
-    { id: 2, ad_soyad: 'Zeynep Yılmaz', tetikleme_kelimesi: 'zeynep', rol: 'Tezgahtar' },
-  ]);
+  const [personeller, setPersoneller] = useState([]);
   const [formAcik, setFormAcik]     = useState(false);
   const [yeniP, setYeniP]           = useState(BOSTA_PERSONEL);
   const [duzenleId, setDuzenleId]   = useState(null);
+  const [yukleniyor, setYukleniyor] = useState(true);
+  const [hata, setHata]             = useState('');
+  const [istatistikler, setIstatistikler] = useState([]);
+  const [seciliPerformans, setSeciliPerformans] = useState(null);
 
-  const kaydet = () => {
-    if (!yeniP.ad_soyad || !yeniP.tetikleme_kelimesi) return;
-    if (duzenleId !== null) {
-      setPersoneller(p => p.map(x => x.id === duzenleId ? { ...x, ...yeniP } : x));
-      setDuzenleId(null);
-    } else {
-      setPersoneller(p => [...p, { ...yeniP, id: Date.now() }]);
+  const personelleriGetir = async () => {
+    try {
+      setHata('');
+      const res = await fetch(`${API_BASE}/personeller`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Personeller yüklenemedi.');
+      }
+      setPersoneller(data);
+    } catch (err) {
+      setHata(err.message || 'Sunucu hatası oluştu.');
+    } finally {
+      setYukleniyor(false);
     }
-    setYeniP(BOSTA_PERSONEL);
-    setFormAcik(false);
+  };
+
+  const istatistikleriGetir = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/personeller/istatistik`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || 'İstatistikler yüklenemedi.');
+      setIstatistikler(data);
+    } catch (err) {
+      setHata(err.message || 'İstatistikler yüklenemedi.');
+      setIstatistikler([]);
+    }
+  };
+
+  useEffect(() => {
+    personelleriGetir();
+    istatistikleriGetir();
+  }, []);
+
+  const kaydet = async () => {
+    if (!yeniP.ad_soyad || !yeniP.tetikleme_kelimesi) return;
+    try {
+      setHata('');
+      const method = duzenleId !== null ? 'PUT' : 'POST';
+      const url = duzenleId !== null
+        ? `${API_BASE}/personeller/${duzenleId}`
+        : `${API_BASE}/personeller`;
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(yeniP),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Kayıt işlemi başarısız.');
+      }
+
+      await personelleriGetir();
+      await istatistikleriGetir();
+      setDuzenleId(null);
+      setYeniP(BOSTA_PERSONEL);
+      setFormAcik(false);
+    } catch (err) {
+      setHata(err.message || 'Kayıt işlemi başarısız.');
+    }
   };
 
   const duzenle = (p) => {
@@ -36,7 +88,20 @@ export const Kullanicilar = () => {
     setFormAcik(true);
   };
 
-  const sil = (id) => setPersoneller(p => p.filter(x => x.id !== id));
+  const sil = async (id) => {
+    try {
+      setHata('');
+      const res = await fetch(`${API_BASE}/personeller/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Silme işlemi başarısız.');
+      }
+      await personelleriGetir();
+      await istatistikleriGetir();
+    } catch (err) {
+      setHata(err.message || 'Silme işlemi başarısız.');
+    }
+  };
 
   return (
     <div className="p-6 md:p-8 max-w-5xl mx-auto">
@@ -123,9 +188,23 @@ export const Kullanicilar = () => {
       )}
 
       {/* Personel kartları */}
+      {hata && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
+          {hata}
+        </div>
+      )}
+      {yukleniyor && (
+        <div className="mb-4 rounded-xl border border-ink-200 bg-ink-50 px-4 py-2 text-sm font-semibold text-ink-600">
+          Personeller yükleniyor...
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {personeller.map((p) => (
           <div key={p.id} className="bg-white border border-ink-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all group">
+            {(() => {
+              const s = istatistikler.find((x) => x.id === p.id);
+              return (
+                <>
             <div className="flex justify-between items-start mb-4">
               <div className="w-11 h-11 rounded-2xl bg-ink-800 flex items-center justify-center shadow-md">
                 <Shield size={20} className="text-gold-400" />
@@ -159,9 +238,73 @@ export const Kullanicilar = () => {
               </div>
               <span className="font-mono font-black text-ink-800 text-sm">"{p.tetikleme_kelimesi}"</span>
             </div>
+
+            <div className="mt-3 rounded-xl border border-gold-100 bg-gold-50 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-gold-700">Performans</span>
+                <span className="px-2 py-0.5 rounded-md bg-white border border-gold-200 text-[11px] font-black text-gold-800">
+                  {(s?.performans_skor ?? 0).toFixed(1)}
+                </span>
+              </div>
+              <div className="text-xs text-ink-600 space-y-1">
+                <p>Alış Has: {(s?.toplam_alis_has ?? 0).toFixed(3)} gr</p>
+                <p>Satış Has: {(s?.toplam_satis_has ?? 0).toFixed(3)} gr</p>
+                <p>İşlem: {s?.islem_sayisi ?? 0} adet</p>
+              </div>
+              <button
+                onClick={() => setSeciliPerformans({ personel: p, stats: s })}
+                className="mt-2 w-full rounded-lg bg-ink-800 text-white text-xs font-bold py-2 hover:bg-ink-900 transition-all"
+              >
+                Performansı Gör
+              </button>
+            </div>
+                </>
+              );
+            })()}
           </div>
         ))}
       </div>
+
+      {seciliPerformans && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display font-bold text-lg text-ink-900">
+                {seciliPerformans.personel.ad_soyad} · Performans Detayı
+              </h3>
+              <button onClick={() => setSeciliPerformans(null)} className="text-ink-400 hover:text-ink-700">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-xl border border-ink-100 p-3">
+                <p className="text-xs text-ink-400">Toplam Alış (Has)</p>
+                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.toplam_alis_has ?? 0).toFixed(3)} gr</p>
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3">
+                <p className="text-xs text-ink-400">Toplam Satış (Has)</p>
+                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.toplam_satis_has ?? 0).toFixed(3)} gr</p>
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3">
+                <p className="text-xs text-ink-400">Net Has</p>
+                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.net_has ?? 0).toFixed(3)} gr</p>
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3">
+                <p className="text-xs text-ink-400">Toplam TL Hacim</p>
+                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.toplam_tl_hacim ?? 0).toFixed(2)} TL</p>
+              </div>
+              <div className="rounded-xl border border-ink-100 p-3">
+                <p className="text-xs text-ink-400">İşlem Sayısı</p>
+                <p className="font-mono font-black text-ink-900">{seciliPerformans.stats?.islem_sayisi ?? 0}</p>
+              </div>
+              <div className="rounded-xl border border-gold-200 bg-gold-50 p-3">
+                <p className="text-xs text-gold-700">Performans Skoru</p>
+                <p className="font-mono font-black text-gold-900">{(seciliPerformans.stats?.performans_skor ?? 0).toFixed(1)} / 100</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
