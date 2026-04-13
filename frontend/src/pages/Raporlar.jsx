@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, TrendingUp, TrendingDown, BarChart2, Calendar, Filter, ChevronDown } from 'lucide-react';
 
+
 const AYARLAR = ['24_AYAR', '22_AYAR', '18_AYAR', '14_AYAR'];
 const AYAR_LABEL = { '24_AYAR': '24 Ayar', '22_AYAR': '22 Ayar', '18_AYAR': '18 Ayar', '14_AYAR': '14 Ayar' };
 const API_BASE = 'http://localhost:8000';
@@ -237,6 +238,7 @@ export const Raporlar = () => {
           <ChevronDown size={12} className="absolute right-3 text-ink-400 pointer-events-none" />
         </div>
       </div>
+      
 
       {hata && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
