@@ -1,4 +1,4 @@
-import { Mic, AlertCircle } from 'lucide-react';
+import { Mic, RotateCcw, Trash2 } from 'lucide-react';
 
 const AYAR_LABEL = {
   '24_AYAR': '24 Ayar',
@@ -14,9 +14,10 @@ const AYAR_COLOR = {
   '14_AYAR': 'text-ink-600 bg-ink-100',
 };
 
-export const IslemTable = ({ islemler }) => (
-  <div className="bg-[#f8fafc] rounded-3xl border border-[#d4af37]/20 shadow-[0_10px_25px_rgba(0,0,0,0.05)] mt-4">
-    <div className="px-6 py-5 border-b border-ink-100 flex items-center justify-between">
+// onUndo prop'unu ekledik
+export const IslemTable = ({ islemler, onUndo }) => (
+  <div className="bg-[#f8fafc] rounded-3xl border border-[#d4af37]/20 shadow-[0_10px_25px_rgba(0,0,0,0.05)] mt-4 overflow-hidden">
+    <div className="px-6 py-5 border-b border-ink-100 flex items-center justify-between bg-white">
       <div>
         <h2 className="text-base font-bold text-ink-800">Son Hareketler</h2>
         <p className="text-xs text-ink-400 mt-0.5">Sesli komutla oluşturulan işlemler</p>
@@ -28,20 +29,21 @@ export const IslemTable = ({ islemler }) => (
     </div>
 
     <div className="overflow-x-auto">
-      <table className="w-full text-left min-w-[580px] bg-[#f8fafc] rounded-lg border border-[#d4af37]/30">
+      <table className="w-full text-left min-w-[650px]">
         <thead>
-          <tr className="border-b border-[#d4af37]/20">
-            <th className="px-6 py-3 text-[11px] font-semibold uppercase tracking-wider text-[#0f172a]">İşlem</th>
-            <th className="px-6 py-3 text-[11px] font-semibold uppercase tracking-wider text-[#0f172a]">Ayar</th>
-            <th className="px-6 py-3 text-[11px] font-semibold uppercase tracking-wider text-[#0f172a]">Brüt Miktar</th>
-            <th className="px-6 py-3 text-[11px] font-semibold uppercase tracking-wider text-[#0f172a]">Has Altın</th>
-            <th className="px-6 py-3 text-[11px] font-semibold uppercase tracking-wider text-[#0f172a]">Saat</th>
+          <tr className="border-b border-[#d4af37]/10 bg-slate-50/50">
+            <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">İşlem</th>
+            <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Ayar</th>
+            <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Brüt Miktar</th>
+            <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Has Altın</th>
+            <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Saat</th>
+            <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500 text-right">Yönet</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#d4af37]/5">
+        <tbody className="divide-y divide-slate-100 bg-white">
           {islemler.length === 0 ? (
             <tr>
-              <td colSpan={5} className="px-6 py-16 text-center">
+              <td colSpan={6} className="px-6 py-16 text-center">
                 <div className="flex flex-col items-center gap-3">
                   <div className="w-12 h-12 rounded-2xl bg-ink-50 flex items-center justify-center">
                     <Mic size={20} className="text-ink-300" />
@@ -53,11 +55,11 @@ export const IslemTable = ({ islemler }) => (
             </tr>
           ) : (
             islemler.map((islem, idx) => (
-            <tr
-              key={idx}
-              className="group hover:bg-[#f8fafc]/30 transition-all duration-200 group-hover:shadow-gold-20/30 group-hover:scale-105"
-              style={{ animationDelay: `${idx * 30}ms` }}
-            >
+              <tr
+                key={islem.id || idx}
+                // Animate-fadeIn class'ı ile yeni gelen işlemler yumuşakça belirir
+                className="group hover:bg-slate-50/80 transition-all duration-300 animate-fadeIn"
+              >
                 <td className="px-6 py-4">
                   <span className={`
                     inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold tracking-wider uppercase
@@ -85,6 +87,15 @@ export const IslemTable = ({ islemler }) => (
                 </td>
                 <td className="px-6 py-4">
                   <span className="text-xs font-mono text-ink-400">{islem.zaman || '—'}</span>
+                </td>
+                <td className="px-6 py-4 text-right">
+                  <button
+                    onClick={() => onUndo && onUndo(islem.id)}
+                    className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                    title="İşlemi Geri Al / Sil"
+                  >
+                    <RotateCcw size={16} />
+                  </button>
                 </td>
               </tr>
             ))

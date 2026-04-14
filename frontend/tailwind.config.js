@@ -51,12 +51,17 @@ export default {
           from: { transform: 'translateY(0)' },
           to:   { transform: 'translateY(-50%)' },
         },
+        fadeIn: {
+        '0%': { opacity: '0', transform: 'translateY(10px)' },
+        '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
       },
       animation: {
         shimmer:    'shimmer 2.5s linear infinite',
         pulse_gold: 'pulse_gold 2s ease-in-out infinite',
         fadeUp:     'fadeUp 0.4s ease forwards',
         ticker:     'ticker 12s linear infinite',
+        fadeIn: 'fadeIn 0.4s ease-out forwards',
       },
     },
   },

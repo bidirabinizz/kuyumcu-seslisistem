@@ -6,10 +6,10 @@ import { IslemTable } from '../components/IslemTable';
 import { FilterBar }  from '../components/FilterBar';
 import { StatCard }   from '../components/StatCard';
 import { VoiceAssistantUI } from "../components/VoiceAssistantUI"
-
+import { API_BASE, WS_BASE } from '../config';
 
 export const Dashboard = () => {
-  const { islemler, toplamHas, connected, loading, voiceState, lastTx, setLastTx } = useSocket('ws://localhost:8000/ws');
+  const { islemler, toplamHas, connected, loading, voiceState, lastTx, setLastTx } = useSocket(WS_BASE);
   const [filters, setFilters] = useState({});
   const [kurlar, setKurlar] = useState(null);
   const API_BASE = 'http://localhost:8000';
@@ -28,7 +28,14 @@ export const Dashboard = () => {
     return i.tip === 'ALIS' ? acc + (marketValue - nominalValue) : acc + (nominalValue - marketValue);
   }, 0);
 
-
+  const handleUndoById = async (id) => {
+  if (!id) return;
+  try {
+    await fetch(`${API_BASE}/islemler/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    console.error("Geri alma hatası:", err);
+  }
+};
   
   useEffect(() => {
     if (lastTx) {
@@ -58,13 +65,13 @@ export const Dashboard = () => {
     return true;
   });
 
-  const exportPDF = () => window.open('http://localhost:8000/rapor/pdf', '_blank');
+  const exportPDF = () => window.open(`${API_BASE}/rapor/pdf`, '_blank');
 
   const handleUndo = async () => {
     if (!lastTx) return;
     try {
-      // Backend'e silme isteği at (Socket UNDO_TX fırlatacağı için UI otomatik güncellenecek)
-      await fetch(`http://localhost:8000/islemler/${lastTx.id}`, { method: 'DELETE' });
+      // Dinamik API_BASE kullanımı
+      await fetch(`${API_BASE}/islemler/${lastTx.id}`, { method: 'DELETE' });
     } catch (err) {
       console.error("Geri alma hatası:", err);
     }
@@ -130,7 +137,7 @@ export const Dashboard = () => {
               İşlemler yükleniyor...
             </div>
           )}
-          <IslemTable islemler={filtrelenmis} />
+          <IslemTable islemler={filtrelenmis} onUndo={handleUndoById} />
         </div>
       </div>
     </div>
