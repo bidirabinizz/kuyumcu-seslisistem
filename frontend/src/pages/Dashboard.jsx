@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Activity, Coins } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, Coins, RotateCcw } from 'lucide-react';
 import { useSocket } from '../hooks/useSocket';
 import { KasaCard }   from '../components/KasaCard';
 import { IslemTable } from '../components/IslemTable';
 import { FilterBar }  from '../components/FilterBar';
 import { StatCard }   from '../components/StatCard';
+import { VoiceAssistantUI } from "../components/VoiceAssistantUI"
 
 export const Dashboard = () => {
-  const { islemler, toplamHas, connected, loading } = useSocket('ws://localhost:8000/ws');
+  const { islemler, toplamHas, connected, loading, voiceState, lastTx, setLastTx } = useSocket('ws://localhost:8000/ws');
   const [filters, setFilters] = useState({});
   const [kurlar, setKurlar] = useState(null);
   const API_BASE = 'http://localhost:8000';
@@ -25,6 +26,15 @@ export const Dashboard = () => {
     const nominalValue = brut * birim;
     return i.tip === 'ALIS' ? acc + (marketValue - nominalValue) : acc + (nominalValue - marketValue);
   }, 0);
+
+  useEffect(() => {
+    if (lastTx) {
+      const timer = setTimeout(() => {
+        setLastTx(null);
+      }, 10000); // 10 saniye ekranda kalır
+      return () => clearTimeout(timer);
+    }
+  }, [lastTx, setLastTx]);
 
   useEffect(() => {
     const getRates = async () => {
@@ -47,9 +57,36 @@ export const Dashboard = () => {
 
   const exportPDF = () => window.open('http://localhost:8000/rapor/pdf', '_blank');
 
+  const handleUndo = async () => {
+    if (!lastTx) return;
+    try {
+      // Backend'e silme isteği at (Socket UNDO_TX fırlatacağı için UI otomatik güncellenecek)
+      await fetch(`http://localhost:8000/islemler/${lastTx.id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.error("Geri alma hatası:", err);
+    }
+  };
+
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto min-h-[calc(100vh-4rem)]">
-      
+      <VoiceAssistantUI voiceState={voiceState} />
+
+      {lastTx && (
+        <div className="fixed bottom-8 left-8 z-50 bg-ink-900 border border-ink-800 text-white pl-5 pr-3 py-3 rounded-2xl shadow-2xl flex items-center gap-6 animate-fadeUp">
+          <div className="flex flex-col">
+            <span className="text-sm font-bold tracking-wide">İşlem Kasa'ya İşlendi</span>
+            <span className="text-xs text-ink-300 font-medium mt-0.5">
+              {lastTx.miktar} gr · {String(lastTx.ayar).replace('_AYAR', ' Ayar')} · {lastTx.tip}
+            </span>
+          </div>
+          <button 
+            onClick={handleUndo} 
+            className="flex items-center gap-1.5 bg-ink-800 hover:bg-ink-700 px-4 py-2.5 rounded-xl text-xs font-black text-gold-400 transition-all active:scale-95"
+          >
+            <RotateCcw size={14} /> Geri Al
+          </button>
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">

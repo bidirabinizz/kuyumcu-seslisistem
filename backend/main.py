@@ -228,6 +228,33 @@ def aktif_tetikleme_haritasi():
     with _wake_words_lock:
         return dict(_wake_words_map)
 
+@app.websocket("/ws")
+async def websocket_dashboard_endpoint(websocket: WebSocket):
+    """
+    React Dashboard'un anlık Kasa (işlem) güncellemelerini
+    dinlemesi için genel WebSocket bağlantısı.
+    """
+    await websocket.accept()
+    
+    # Manager'a eklemek için bu websocket nesnesine özel benzersiz bir ID (int) alıyoruz
+    dashboard_id = id(websocket) 
+    manager.active_connections[dashboard_id] = websocket
+    print(f"🖥️ Dashboard (Kasa Takip) bağlandı! (ID: {dashboard_id})")
+    
+    try:
+        while True:
+            # Dashboard sadece dinleyicidir, ancak bağlantıyı açık tutmak 
+            # ve ping-pong sağlamak için receive metodunu bekletiyoruz.
+            await websocket.receive_text()
+            
+    except WebSocketDisconnect:
+        if dashboard_id in manager.active_connections:
+            del manager.active_connections[dashboard_id]
+        print(f"❌ Dashboard bağlantısı koptu. (ID: {dashboard_id})")
+    except Exception as e:
+        if dashboard_id in manager.active_connections:
+            del manager.active_connections[dashboard_id]
+        print(f"❌ Dashboard hatası: {e}")
 
 # ─────────────────────────────────────────────
 # WEBSOCKET ENDPOINT  (TEK, DOĞRU VERSİYON)
@@ -239,12 +266,9 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
         return
 
     await manager.connect(websocket, personel_id)
-
-    # Her bağlantı kendi Recognizer'ını oluşturur — thread-safe
     recognizer = KaldiRecognizer(vosk_model, 16000)
-
     audio_buffer = bytearray()
-    state = "WAKE_WORD"  # WAKE_WORD | COMMAND
+    state = "WAKE_WORD"
 
     try:
         while True:
@@ -263,44 +287,30 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
                             state = "COMMAND"
                             audio_buffer.clear()
                             recognizer.Reset()
-                            # Flutter'a "dinlemeye geçildi" bildirimi
                             await manager.send_text(personel_id, "DİNLİYORUM")
+                            # YENİ: Dashboard'a asistanın dinlediğini bildir
+                            await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "LISTENING", "personel_id": personel_id}))
                             break
 
             # ── AŞAMA 2: Whisper — komut analizi ──────────────────
             elif state == "COMMAND":
-                # ~4 saniyelik PCM 16bit mono = 16000 * 2 * 4 byte
                 if len(audio_buffer) >= 16000 * 2 * 4:
-                    audio_np = (
-                        np.frombuffer(bytes(audio_buffer), dtype=np.int16)
-                        .astype(np.float32) / 32768.0
-                    )
-
-                    # Whisper analizi blocking — executor'da çalıştır
+                    # YENİ: Dashboard'a asistanın düşündüğünü (sesi işlediğini) bildir
+                    await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "THINKING", "personel_id": personel_id}))
+                    
+                    audio_np = (np.frombuffer(bytes(audio_buffer), dtype=np.int16).astype(np.float32) / 32768.0)
                     loop = asyncio.get_running_loop()
                     result = await loop.run_in_executor(
-                        None,
-                        lambda: whisper_model.transcribe(
-                            audio_np,
-                            language="tr",
-                            fp16=False,
-                            initial_prompt=WHISPER_PROMPT,
-                        )
+                        None, lambda: whisper_model.transcribe(audio_np, language="tr", fp16=False, initial_prompt=WHISPER_PROMPT)
                     )
                     komut_metni = result["text"].strip()
-                    print(f"  [Personel {personel_id}] Duyulan: '{komut_metni}'")
-
                     islem = sesli_komutu_ayristir(komut_metni, personel_id)
 
                     if "hata" not in islem:
                         tip_metin  = "alış" if islem["islem_tipi"] == "ALIS" else "satış"
                         ayar_metin = islem["urun_cinsi"].replace("_AYAR", " ayar")
-                        onay_metni = (
-                            f"{islem['brut_miktar']} gram {ayar_metin} "
-                            f"{tip_metin}, onaylıyor musunuz?"
-                        )
+                        onay_metni = f"{islem['brut_miktar']} gram {ayar_metin} {tip_metin}, onaylıyor musunuz?"
 
-                        # Edge-TTS ile onay sesini üret ve kişiye gönder
                         try:
                             communicate = edge_tts.Communicate(onay_metni, "tr-TR-AhmetNeural")
                             tts_data = b""
@@ -309,38 +319,44 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
                                     tts_data += chunk["data"]
                             await manager.send_audio(personel_id, tts_data)
                         except Exception as e:
-                            print(f"  [TTS HATA]: {e}")
                             await manager.send_text(personel_id, onay_metni)
 
-                        # Onay bekleme: bir sonraki ses paketinde "onay"/"iptal" ara
                         await manager.send_text(personel_id, f"ONAY_BEKLE:{json.dumps(islem, ensure_ascii=False)}")
+                        # YENİ: Dashboard'a onay kartını göster
+                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "CONFIRMING", "islem": islem}, ensure_ascii=False))
                         state = "CONFIRM"
                         audio_buffer.clear()
                     else:
-                        print(f"  [HATA] {islem['hata']}")
                         await manager.send_text(personel_id, f"HATA:{islem['hata']}")
+                        # YENİ: Dashboard'a hatayı göster
+                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "ERROR", "mesaj": islem["hata"]}, ensure_ascii=False))
                         audio_buffer.clear()
                         state = "WAKE_WORD"
+                        # Hata mesajı 3 saniye ekranda kalsın diye arka planda sıfırlama tetikliyoruz
+                        asyncio.create_task(asyncio.sleep(3))
+                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
 
             # ── AŞAMA 3: Onay dinleme ─────────────────────────────
             elif state == "CONFIRM":
                 if recognizer.AcceptWaveform(bytes(data)):
                     metin = json.loads(recognizer.Result()).get("text", "").lower()
                     if "onay" in metin or "evet" in metin:
-                        # Bekleyen işlemi kaydet
-                        # (islem değişkeni bu scope'ta erişilemez, text mesajından parse et)
                         await manager.send_text(personel_id, "ONAYLANDI")
+                        # YENİ: İşlem bitti, arayüzü uyut
+                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
                         recognizer.Reset()
                         state = "WAKE_WORD"
                     elif "iptal" in metin or "hayır" in metin:
                         await manager.send_text(personel_id, "İPTAL")
+                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
                         recognizer.Reset()
                         state = "WAKE_WORD"
 
     except WebSocketDisconnect:
         manager.disconnect(personel_id)
+        # Personel koparsa UI'ı da sıfırla
+        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
     except Exception as e:
-        print(f"[WS HATA] Personel {personel_id}: {e}")
         manager.disconnect(personel_id)
 
 
@@ -439,7 +455,7 @@ def veritabanina_yaz(islem: dict):
             """
             INSERT INTO islemler (personel_id, islem_tipi, urun_cinsi, brut_miktar, milyem, birim_fiyat)
             VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING net_has_miktar;
+            RETURNING id, net_has_miktar;  # YENİ: id bilgisini de istiyoruz
             """,
             (
                 islem["personel_id"],
@@ -450,16 +466,16 @@ def veritabanina_yaz(islem: dict):
                 islem["birim_fiyat"],
             ),
         )
-        net_has = float(cursor.fetchone()[0])
+        row_id, net_has = cursor.fetchone()  # YENİ: row_id'yi aldık
+        net_has = float(net_has)
         conn.commit()
         cursor.close()
         conn.close()
 
-        print(f"\n  ✓ KASAYA İŞLENDİ")
-        print(f"  {islem['brut_miktar']} gr  {islem['urun_cinsi']}  →  {islem['islem_tipi']}")
-        print(f"  Has altın etkisi: {net_has} gr\n")
-
+        # Dashboard'a yeni işlem olarak fırlat (type ve id eklendi)
         payload = json.dumps({
+            "type":   "NEW_TX",
+            "id":     row_id,
             "tip":    islem["islem_tipi"],
             "miktar": islem["brut_miktar"],
             "ayar":   islem["urun_cinsi"],
@@ -680,6 +696,42 @@ def personel_guncelle(personel_id: int, payload: PersonelPayload):
         if cursor: cursor.close()
         if conn: conn.close()
 
+@app.delete("/islemler/{islem_id}")
+def islem_sil_ve_geri_al(islem_id: int):
+    conn = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # Silmeden önce işlemin has miktarını ve tipini öğrenelim ki UI'da bakiyeyi geri saralım
+        cursor.execute("SELECT islem_tipi, net_has_miktar FROM islemler WHERE id = %s", (islem_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="İşlem bulunamadı veya zaten silinmiş.")
+            
+        islem_tipi, net_has = row
+        
+        # İşlemi veritabanından kalıcı olarak sil
+        cursor.execute("DELETE FROM islemler WHERE id = %s", (islem_id,))
+        conn.commit()
+        cursor.close()
+        
+        # Tüm bağlı Dashboard'lara silme emrini broadcast et
+        payload = json.dumps({
+            "type": "UNDO_TX",
+            "id": islem_id,
+            "tip": islem_tipi,
+            "has": float(net_has)
+        })
+        broadcast_from_thread(payload)
+        
+        return {"mesaj": "İşlem başarıyla geri alındı."}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Geri alma başarısız: {e}")
+    finally:
+        if conn: conn.close()
 
 @app.delete("/personeller/{personel_id}")
 def personel_sil(personel_id: int):
@@ -737,6 +789,14 @@ def islemleri_getir(
     finally:
         if conn: conn.close()
 
+@app.get("/personeller/aktif")
+def aktif_personeller():
+    """
+    Sisteme şu an WebSocket üzerinden bağlı (mikrofonu açık/dinlemede olan)
+    personellerin ID listesini döndürür. Veritabanına gitmez, RAM'den okur.
+    """
+    # manager instance'ı içerisindeki dictionary'nin key'leri personel_id'lerdir
+    return list(manager.active_connections.keys())
 
 @app.get("/personeller/istatistik")
 def personel_istatistikleri():

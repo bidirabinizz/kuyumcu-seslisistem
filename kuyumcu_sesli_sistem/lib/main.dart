@@ -236,7 +236,7 @@ class _VoiceControlPageState extends State<VoiceControlPage>
             letterSpacing: 3,
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         Container(
           height: 1,
           width: 100,
@@ -248,7 +248,7 @@ class _VoiceControlPageState extends State<VoiceControlPage>
         const Text(
           "İŞLEM YAPAN PERSONEL",
           style: TextStyle(
-            color: Colors.white54,
+            color: Color.fromARGB(139, 255, 255, 255),
             fontSize: 12,
             letterSpacing: 1.5,
           ),

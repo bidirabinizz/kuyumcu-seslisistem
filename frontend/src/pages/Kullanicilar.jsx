@@ -19,6 +19,19 @@ export const Kullanicilar = () => {
   const [hata, setHata]             = useState('');
   const [istatistikler, setIstatistikler] = useState([]);
   const [seciliPerformans, setSeciliPerformans] = useState(null);
+  const [aktifPersoneller, setAktifPersoneller] = useState([]);
+
+  const aktifleriGetir = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/personeller/aktif`);
+      if (res.ok) {
+        const data = await res.json();
+        setAktifPersoneller(data);
+      }
+    } catch (err) {
+      console.warn('Aktif personel durumu alınamadı.', err);
+    }
+  };
 
   const personelleriGetir = async () => {
     try {
@@ -51,6 +64,10 @@ export const Kullanicilar = () => {
   useEffect(() => {
     personelleriGetir();
     istatistikleriGetir();
+    aktifleriGetir();
+
+    const interval = setInterval(aktifleriGetir, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   const kaydet = async () => {
@@ -199,37 +216,68 @@ export const Kullanicilar = () => {
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {personeller.map((p) => (
-          <div key={p.id} className="bg-white border border-ink-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all group">
-            {(() => {
-              const s = istatistikler.find((x) => x.id === p.id);
-              return (
-                <>
-            <div className="flex justify-between items-start mb-4">
-              <div className="w-11 h-11 rounded-2xl bg-ink-800 flex items-center justify-center shadow-md">
-                <Shield size={20} className="text-gold-400" />
-              </div>
-              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => duzenle(p)}
-                  className="w-8 h-8 rounded-lg bg-ink-50 hover:bg-ink-100 flex items-center justify-center text-ink-500 transition-all"
-                >
-                  <Edit2 size={13} />
-                </button>
-                <button
-                  onClick={() => sil(p.id)}
-                  className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-500 transition-all"
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            </div>
+  {personeller.map((p) => {
+    // YENİ: Bu personel şu an WebSocket'e bağlı mı?
+    const isAktif = aktifPersoneller.includes(p.id);
 
-            <h3 className="font-display text-lg font-bold text-ink-900 leading-tight">{p.ad_soyad}</h3>
+    return (
+      <div key={p.id} className={`bg-white border ${isAktif ? 'border-green-300 shadow-md' : 'border-ink-100 shadow-sm'} rounded-2xl p-5 hover:shadow-md transition-all group relative`}>
+        {(() => {
+          const s = istatistikler.find((x) => x.id === p.id);
+          return (
+            <>
+              {/* Kart Başlığı ve İkon */}
+              <div className="flex justify-between items-start mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-ink-800 flex items-center justify-center shadow-md relative">
+                    <Shield size={20} className="text-gold-400" />
+                    
+                    {/* AKTİF SİNYALİ (Yeşil yanan nokta) */}
+                    {isAktif && (
+                      <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-4 w-4 bg-green-500 border-2 border-white"></span>
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* AKTİF ROZETİ */}
+                  {isAktif ? (
+                    <span className="bg-green-50 text-green-700 border border-green-200 text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-lg flex items-center gap-1.5 transition-all">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                      Sisteme Bağlı
+                    </span>
+                  ) : (
+                    <span className="bg-ink-50 text-red-500 border border-ink-200 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-lg flex items-center gap-1.5 transition-all">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>
+                      Bağlı Değil
+                    </span>
+                  )}
+                </div>
 
-            <span className={`inline-block mt-1 mb-4 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold ${ROL_BADGE[p.rol] || 'bg-ink-100 text-ink-700 border-ink-200'}`}>
-              {p.rol}
-            </span>
+                {/* Aksiyon Butonları (Düzenle/Sil) */}
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => duzenle(p)}
+                    className="w-8 h-8 rounded-lg bg-ink-50 hover:bg-ink-100 flex items-center justify-center text-ink-500 transition-all"
+                  >
+                    <Edit2 size={13} />
+                  </button>
+                  <button
+                    onClick={() => sil(p.id)}
+                    className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-500 transition-all"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Geri Kalan Bilgiler (Mevcut kodunla aynı) */}
+              <h3 className="font-display text-lg font-bold text-ink-900 leading-tight">{p.ad_soyad}</h3>
+              
+              <span className={`inline-block mt-1 mb-4 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold ${ROL_BADGE[p.rol] || 'bg-ink-100 text-ink-700 border-ink-200'}`}>
+                {p.rol}
+              </span>
 
             <div className="bg-ink-50 border border-dashed border-ink-200 rounded-xl p-3">
               <div className="flex items-center gap-1.5 mb-1">
@@ -262,7 +310,8 @@ export const Kullanicilar = () => {
               );
             })()}
           </div>
-        ))}
+    );
+        })}
       </div>
 
       {seciliPerformans && (
