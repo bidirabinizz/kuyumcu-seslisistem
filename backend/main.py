@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from vosk import KaldiRecognizer, Model
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import socket
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -70,6 +71,38 @@ whisper_model = None
 # ─────────────────────────────────────────────
 # WEBSOCKET YÖNETİCİSİ
 # ─────────────────────────────────────────────
+async def tts_ve_gonder(personel_id: int, metin: str):
+    """Metni sese çevirir ve ilgili personelin WebSocket kanalına gönderir."""
+    try:
+        communicate = edge_tts.Communicate(metin, "tr-TR-AhmetNeural")
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
+        
+        await manager.send_audio(personel_id, audio_data)
+        print(f"🔊 Personel {personel_id} için sesli geri bildirim gönderildi.")
+    except Exception as e:
+        print(f"⚠️ TTS Hatası: {e}")
+        await manager.send_text(personel_id, f"MESAJ: {metin}")
+
+
+
+def get_local_ip():
+    """Bilgisayarın dükkan ağındaki yerel IPv4 adresini bulur."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Gerçek bir bağlantı kurmaz, sadece ağ arayüzünü tetikler
+        s.connect(('8.8.8.8', 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[int, WebSocket] = {}
@@ -158,6 +191,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Kuyumcu ERP API", lifespan=lifespan)
+
+# Frontend bu adresi çağırıp IP'yi gösterecek
+@app.get("/sistem/ip")
+def get_server_ip():
+    return {"ip": get_local_ip()}
 
 app.add_middleware(
     CORSMiddleware,
@@ -320,6 +358,8 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
                             await manager.send_audio(personel_id, tts_data)
                         except Exception as e:
                             await manager.send_text(personel_id, onay_metni)
+
+                        await tts_ve_gonder(personel_id, onay_metni)
 
                         await manager.send_text(personel_id, f"ONAY_BEKLE:{json.dumps(islem, ensure_ascii=False)}")
                         # YENİ: Dashboard'a onay kartını göster
@@ -496,18 +536,6 @@ def sistem_biipi(frekans, sure):
     else:
         print("\a", end="", flush=True)
 
-
-def _tts_konus(metin: str):
-    global _tts_engine
-    try:
-        with _tts_lock:
-            if _tts_engine is None:
-                _tts_engine = pyttsx3.init()
-                _tts_engine.setProperty("rate", 165)
-            _tts_engine.say(metin)
-            _tts_engine.runAndWait()
-    except Exception as e:
-        print(f"[TTS UYARI]: {e}")
 
 
 def _parse_decimal(value: str | None) -> float | None:

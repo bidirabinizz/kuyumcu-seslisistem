@@ -1,10 +1,11 @@
-import { LayoutDashboard, Users, BarChart3, ShieldCheck, Mic, X } from 'lucide-react';
+import { LayoutDashboard, Users, BarChart3, ShieldCheck, Mic, X, Settings2Icon } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 
 const menu = [
-  { icon: LayoutDashboard, label: 'Dashboard',    path: '/' },
+  { icon: LayoutDashboard, label: 'Canlı İzleme',    path: '/' },
   { icon: Users,           label: 'Personeller',  path: '/kullanicilar' },
   { icon: BarChart3,       label: 'Raporlar',     path: '/raporlar' },
+  { icon: Settings2Icon, label: 'Ayarlar',  path: '/ayarlar'}
 ];
 
 export const Sidebar = ({ closeMobileMenu, mobileOpen }) => {

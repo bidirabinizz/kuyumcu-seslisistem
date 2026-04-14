@@ -55,6 +55,7 @@ class _VoiceControlPageState extends State<VoiceControlPage>
   @override
   void initState() {
     super.initState();
+    AppConfig.loadConfig().then((_) => _personelleriGetir());
     WidgetsBinding.instance.addObserver(this);
     _voiceService = VoiceService(
       // Sunucudan gelen durum metinlerini UI'ya yansıt
@@ -91,6 +92,7 @@ class _VoiceControlPageState extends State<VoiceControlPage>
     setState(() {
       _isLoading = true;
       _hasError = false;
+      _secilenPersonel = null;
     });
     try {
       final response = await http
@@ -156,6 +158,30 @@ class _VoiceControlPageState extends State<VoiceControlPage>
       _showSnack("Mikrofon izni alınamadı veya bağlantı kurulamadı.");
     }
   }
+  // main.dart içine bir fonksiyon ekle
+void _ipAyarlari() {
+  final controller = TextEditingController(text: AppConfig.apiBase.split("//")[1].split(":")[0]);
+  showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text("Sunucu IP Ayarı"),
+      content: TextField(controller: controller, decoration: const InputDecoration(hintText: "Örn: 192.168.1.15")),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text("İptal")),
+        ElevatedButton(
+          onPressed: () async {
+            await AppConfig.setHost(controller.text);
+            if (mounted) {
+              Navigator.pop(context);
+              _personelleriGetir(); // Listeyi yeni IP ile tekrar çek
+            }
+          }, 
+          child: const Text("Kaydet")
+        ),
+      ],
+    ),
+  );
+}
 
   void _sistemDurdur() {
     _voiceService.stopStreaming();
@@ -168,9 +194,20 @@ class _VoiceControlPageState extends State<VoiceControlPage>
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
+Widget build(BuildContext context) {
+  return Scaffold(
+    appBar: AppBar(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.settings, color: Color(0xFFD4AF37)),
+          onPressed: _ipAyarlari, // IP Ayarları dialogunu açar
+        ),
+      ],
+    ),
+    extendBodyBehindAppBar: true,
+    body: Container(
         width: double.infinity,
         decoration: BoxDecoration(
           gradient: RadialGradient(
@@ -192,6 +229,8 @@ class _VoiceControlPageState extends State<VoiceControlPage>
       ),
     );
   }
+
+  
 
   Widget _buildHataEkrani() {
     return Center(

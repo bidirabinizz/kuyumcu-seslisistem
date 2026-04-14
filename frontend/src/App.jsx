@@ -7,6 +7,7 @@ import { Dashboard }    from './pages/Dashboard';
 import { Kullanicilar } from './pages/Kullanicilar';
 import { Raporlar }     from './pages/Raporlar';
 import './index.css';
+import Ayarlar from './pages/Ayarlar'; // Import etmeyi unutma
 
 export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -38,6 +39,7 @@ export default function App() {
               <Route path="/"              element={<Dashboard />}    />
               <Route path="/kullanicilar"  element={<Kullanicilar />} />
               <Route path="/raporlar"      element={<Raporlar />}     />
+              <Route path="/ayarlar" element={<Ayarlar />} />
             </Routes>
           </main>
         </div>

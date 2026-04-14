@@ -15,7 +15,7 @@ const AYAR_COLOR = {
 };
 
 export const IslemTable = ({ islemler }) => (
-  <div className="bg-[#f8fafc] rounded-3xl border border-[#d4af37]/20 shadow-[0_10px_25px_rgba(0,0,0,0.05)]">
+  <div className="bg-[#f8fafc] rounded-3xl border border-[#d4af37]/20 shadow-[0_10px_25px_rgba(0,0,0,0.05)] mt-4">
     <div className="px-6 py-5 border-b border-ink-100 flex items-center justify-between">
       <div>
         <h2 className="text-base font-bold text-ink-800">Son Hareketler</h2>

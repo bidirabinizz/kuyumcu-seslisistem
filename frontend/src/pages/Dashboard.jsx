@@ -7,12 +7,13 @@ import { FilterBar }  from '../components/FilterBar';
 import { StatCard }   from '../components/StatCard';
 import { VoiceAssistantUI } from "../components/VoiceAssistantUI"
 
+
 export const Dashboard = () => {
   const { islemler, toplamHas, connected, loading, voiceState, lastTx, setLastTx } = useSocket('ws://localhost:8000/ws');
   const [filters, setFilters] = useState({});
   const [kurlar, setKurlar] = useState(null);
   const API_BASE = 'http://localhost:8000';
-
+  
   const gunlukAlis  = islemler.filter(i => i.tip === 'ALIS').reduce((s, i) => s + i.has, 0);
   const gunlukSatis = islemler.filter(i => i.tip === 'SATIS').reduce((s, i) => s + i.has, 0);
   const piyasaFiyat = Number(kurlar?.gram_altin_24k_try || 0);
@@ -27,6 +28,8 @@ export const Dashboard = () => {
     return i.tip === 'ALIS' ? acc + (marketValue - nominalValue) : acc + (nominalValue - marketValue);
   }, 0);
 
+
+  
   useEffect(() => {
     if (lastTx) {
       const timer = setTimeout(() => {
@@ -70,7 +73,8 @@ export const Dashboard = () => {
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto min-h-[calc(100vh-4rem)]">
       <VoiceAssistantUI voiceState={voiceState} />
-
+     
+      
       {lastTx && (
         <div className="fixed bottom-8 left-8 z-50 bg-ink-900 border border-ink-800 text-white pl-5 pr-3 py-3 rounded-2xl shadow-2xl flex items-center gap-6 animate-fadeUp">
           <div className="flex flex-col">
@@ -87,6 +91,8 @@ export const Dashboard = () => {
           </button>
         </div>
       )}
+
+      
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
