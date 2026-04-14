@@ -88,7 +88,7 @@ export const Sidebar = ({ closeMobileMenu, mobileOpen }) => {
 
         {/* Footer */}
         <div className="px-6 py-5 border-t border-white/5">
-          <p className="text-[10px] text-ink-600 font-mono">v2.1.0 · 2025</p>
+          <p className="text-[10px] text-ink-600 font-mono">v2.1.0 · 2026</p>
         </div>
       </aside>
     </>

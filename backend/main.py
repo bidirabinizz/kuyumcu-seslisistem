@@ -307,96 +307,112 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
     recognizer = KaldiRecognizer(vosk_model, 16000)
     audio_buffer = bytearray()
     state = "WAKE_WORD"
+    
+    # Bekleyen işlem verileri (Döngü dışında tutulmalı!)
+    pending_tx = None
+    pending_undo_id = None
 
     try:
         while True:
             data = await websocket.receive_bytes()
             audio_buffer.extend(data)
 
-            # ── AŞAMA 1: Vosk — wake word ─────────────────────────
+            # ── AŞAMA 1: Wake Word ─────────────────────────
             if state == "WAKE_WORD":
                 if recognizer.AcceptWaveform(bytes(data)):
                     metin = json.loads(recognizer.Result()).get("text", "")
                     wake_map = aktif_tetikleme_haritasi()
-
                     for kw, pid in wake_map.items():
                         if kw in metin and pid == personel_id:
-                            print(f"🔔 Personel {personel_id}: '{kw.upper()}' tetiklendi!")
                             state = "COMMAND"
                             audio_buffer.clear()
                             recognizer.Reset()
                             await manager.send_text(personel_id, "DİNLİYORUM")
-                            # YENİ: Dashboard'a asistanın dinlediğini bildir
                             await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "LISTENING", "personel_id": personel_id}))
                             break
 
-            # ── AŞAMA 2: Whisper — komut analizi ──────────────────
+            # ── AŞAMA 2: Komut Analizi ──────────────────
             elif state == "COMMAND":
-                if len(audio_buffer) >= 16000 * 2 * 4:
-                    # YENİ: Dashboard'a asistanın düşündüğünü (sesi işlediğini) bildir
+                if len(audio_buffer) >= 16000 * 2 * 4: # 4 saniye
                     await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "THINKING", "personel_id": personel_id}))
                     
                     audio_np = (np.frombuffer(bytes(audio_buffer), dtype=np.int16).astype(np.float32) / 32768.0)
                     loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(
-                        None, lambda: whisper_model.transcribe(audio_np, language="tr", fp16=False, initial_prompt=WHISPER_PROMPT)
-                    )
+                    result = await loop.run_in_executor(None, lambda: whisper_model.transcribe(audio_np, language="tr", fp16=False))
                     komut_metni = result["text"].strip()
                     islem = sesli_komutu_ayristir(komut_metni, personel_id)
 
-                    if "hata" not in islem:
-                        tip_metin  = "alış" if islem["islem_tipi"] == "ALIS" else "satış"
-                        ayar_metin = islem["urun_cinsi"].replace("_AYAR", " ayar")
-                        onay_metni = f"{islem['brut_miktar']} gram {ayar_metin} {tip_metin}, onaylıyor musunuz?"
+                    # DURUM A: Geri Alma İsteği
+                    if islem.get("tip") == "UNDO_REQUEST":
+                        conn = psycopg2.connect(**DB_CONFIG)
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT id, islem_tipi, urun_cinsi, brut_miktar 
+                            FROM islemler WHERE personel_id = %s 
+                            ORDER BY islem_tarihi DESC LIMIT 1
+                        """, (personel_id,))
+                        last_tx = cursor.fetchone()
+                        cursor.close()
+                        conn.close()
 
-                        try:
-                            communicate = edge_tts.Communicate(onay_metni, "tr-TR-AhmetNeural")
-                            tts_data = b""
-                            async for chunk in communicate.stream():
-                                if chunk["type"] == "audio":
-                                    tts_data += chunk["data"]
-                            await manager.send_audio(personel_id, tts_data)
-                        except Exception as e:
-                            await manager.send_text(personel_id, onay_metni)
+                        if last_tx:
+                            tx_id, tx_tip, tx_ayar, tx_miktar = last_tx
+                            tip_str = "alış" if tx_tip == "ALIS" else "satış"
+                            onay_metni = f"Son işleminiz {tx_miktar} gram {tx_ayar.split('_')[0]} ayar {tip_str}. Silmemi onaylıyor musunuz?"
+                            pending_undo_id = tx_id
+                            await tts_ve_gonder(personel_id, onay_metni)
+                            state = "CONFIRM_UNDO"
+                        else:
+                            await tts_ve_gonder(personel_id, "Silinecek işlem bulunamadı.")
+                            state = "WAKE_WORD"
+                        audio_buffer.clear()
 
+                    # DURUM B: Normal İşlem Kaydı
+                    elif islem.get("tip") == "NORMAL_TX":
+                        tip_metin = "alış" if islem["islem_tipi"] == "ALIS" else "satış"
+                        onay_metni = f"{islem['brut_miktar']} gram {islem['urun_cinsi'].split('_')[0]} ayar {tip_metin}, onay mı?"
+                        pending_tx = islem
                         await tts_ve_gonder(personel_id, onay_metni)
-
-                        await manager.send_text(personel_id, f"ONAY_BEKLE:{json.dumps(islem, ensure_ascii=False)}")
-                        # YENİ: Dashboard'a onay kartını göster
-                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "CONFIRMING", "islem": islem}, ensure_ascii=False))
                         state = "CONFIRM"
                         audio_buffer.clear()
+                    
+                    # DURUM C: Hata
                     else:
-                        await manager.send_text(personel_id, f"HATA:{islem['hata']}")
-                        # YENİ: Dashboard'a hatayı göster
-                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "ERROR", "mesaj": islem["hata"]}, ensure_ascii=False))
-                        audio_buffer.clear()
+                        await manager.send_text(personel_id, f"HATA:{islem.get('hata')}")
                         state = "WAKE_WORD"
-                        # Hata mesajı 3 saniye ekranda kalsın diye arka planda sıfırlama tetikliyoruz
-                        asyncio.create_task(asyncio.sleep(3))
-                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
+                        audio_buffer.clear()
 
-            # ── AŞAMA 3: Onay dinleme ─────────────────────────────
-            elif state == "CONFIRM":
+            # ── AŞAMA 3: Onay Dinleme ─────────────────────────────
+            elif state in ["CONFIRM", "CONFIRM_UNDO"]:
                 if recognizer.AcceptWaveform(bytes(data)):
                     metin = json.loads(recognizer.Result()).get("text", "").lower()
-                    if "onay" in metin or "evet" in metin:
-                        await manager.send_text(personel_id, "ONAYLANDI")
-                        # YENİ: İşlem bitti, arayüzü uyut
-                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
-                        recognizer.Reset()
+                    evet_mi = any(k in metin for k in ["onay", "evet", "tamam", "sil"])
+                    hayir_mi = any(k in metin for k in ["iptal", "hayır", "dur"])
+
+                    if evet_mi:
+                        if state == "CONFIRM" and pending_tx:
+                            veritabanina_yaz(pending_tx)
+                            await tts_ve_gonder(personel_id, "İşlem kaydedildi.")
+                        elif state == "CONFIRM_UNDO" and pending_undo_id:
+                            islem_sil_ve_geri_al(pending_undo_id)
+                            await tts_ve_gonder(personel_id, "İşlem silindi.")
+                        
                         state = "WAKE_WORD"
-                    elif "iptal" in metin or "hayır" in metin:
-                        await manager.send_text(personel_id, "İPTAL")
-                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
+                        pending_tx = pending_undo_id = None
                         recognizer.Reset()
+                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
+                    
+                    elif hayir_mi:
+                        await tts_ve_gonder(personel_id, "İşlem iptal edildi.")
                         state = "WAKE_WORD"
+                        pending_tx = pending_undo_id = None
+                        recognizer.Reset()
+                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
 
     except WebSocketDisconnect:
         manager.disconnect(personel_id)
-        # Personel koparsa UI'ı da sıfırla
-        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
     except Exception as e:
+        print(f"Sistem Hatası: {e}")
         manager.disconnect(personel_id)
 
 
@@ -449,6 +465,12 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     metin = metni_sayiya_dok(ham_metin)
     print(f"  [İşlenen metin]: {metin}")
 
+    # --- GERİ ALMA / SİLME KOMUTU KONTROLÜ ---
+    silme_kelimeleri = ["sil", "iptal et", "geri al", "son işlemi", "yanlış oldu"]
+    if any(k in metin for k in silme_kelimeleri):
+        return {"tip": "UNDO_REQUEST", "personel_id": personel_id}
+
+    # --- NORMAL İŞLEM AYRIŞTIRMA ---
     if "alış" in metin or "alıs" in metin:
         islem_tipi = "ALIS"
     elif "satış" in metin or "satis" in metin:
@@ -458,7 +480,7 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
 
     ayar_match = re.search(r"\b(14|18|22|24)\b", metin)
     if not ayar_match:
-        return {"hata": "Geçerli altın ayarı (14, 18, 22, 24) bulunamadı."}
+        return {"hata": "Altın ayarı bulunamadı."}
 
     ayar_degeri = ayar_match.group(1)
     urun_cinsi  = f"{ayar_degeri}_AYAR"
@@ -469,18 +491,19 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     kalan = metin.replace(ayar_degeri, "", 1)
     miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", kalan)
     if not miktar_match:
-        return {"hata": "Gramaj (miktar) bulunamadı."}
+        return {"hata": "Miktar (gram) bulunamadı."}
 
     brut_miktar = float(miktar_match.group(1).replace(",", "."))
-    milyem      = MILYEM_MAP.get(urun_cinsi, 0.0)
+    milyem = MILYEM_MAP.get(urun_cinsi, 0.0)
 
     return {
+        "tip": "NORMAL_TX",
         "personel_id": personel_id,
-        "islem_tipi":  islem_tipi,
-        "urun_cinsi":  urun_cinsi,
+        "islem_tipi": islem_tipi,
+        "urun_cinsi": urun_cinsi,
         "brut_miktar": brut_miktar,
         "birim_fiyat": birim_fiyat,
-        "milyem":      milyem,
+        "milyem": milyem
     }
 
 
