@@ -7,13 +7,21 @@ import { FilterBar }  from '../components/FilterBar';
 import { StatCard }   from '../components/StatCard';
 import { VoiceAssistantUI } from "../components/VoiceAssistantUI"
 import { API_BASE, WS_BASE } from '../config';
+import { ManualIslemForm } from '../components/ManualIslemForm';
+import axios from 'axios';
 
 export const Dashboard = () => {
   const { islemler, toplamHas, connected, loading, voiceState, lastTx, setLastTx } = useSocket(WS_BASE);
-  const [filters, setFilters] = useState({});
+  const [filters, setFilters] = useState({
+    personel_id: '',
+    tip: '',
+    tarih: ''
+  });
   const [kurlar, setKurlar] = useState(null);
   const API_BASE = 'http://localhost:8000';
   
+
+
   const gunlukAlis  = islemler.filter(i => i.tip === 'ALIS').reduce((s, i) => s + i.has, 0);
   const gunlukSatis = islemler.filter(i => i.tip === 'SATIS').reduce((s, i) => s + i.has, 0);
   const piyasaFiyat = Number(kurlar?.gram_altin_24k_try || 0);
@@ -28,15 +36,30 @@ export const Dashboard = () => {
     return i.tip === 'ALIS' ? acc + (marketValue - nominalValue) : acc + (nominalValue - marketValue);
   }, 0);
 
-  const handleUndoById = async (id) => {
-  if (!id) return;
+
+const handleEdit = async (id, updatedData) => {
   try {
-    await fetch(`${API_BASE}/islemler/${id}`, { method: 'DELETE' });
-  } catch (err) {
-    console.error("Geri alma hatası:", err);
+    // Backend'de PUT endpoint'i oluşturduktan sonra bu çalışacak.
+    await axios.put(`${API_BASE}/islemler/${id}`, {
+      ...updatedData,
+      personel_id: 1 // Veya işlemi düzenleyen yetkilinin ID'si (örn: context'ten alınabilir)
+    });
+  } catch (error) {
+    alert("İşlem güncellenirken hata oluştu.");
   }
 };
   
+const filteredIslemler = islemler.filter(islem => {
+    const personelMatch = !filters.personel_id || String(islem.personel_id) === String(filters.personel_id);
+    const tipMatch = !filters.tip || islem.tip === filters.tip;
+    
+    // Tarih filtreleme (islem.tarih formatınıza göre düzenleyin)
+    const islemTarihi = islem.islem_tarihi?.split('T')[0]; 
+    const tarihMatch = !filters.tarih || islemTarihi === filters.tarih;
+
+    return personelMatch && tipMatch && tarihMatch;
+  });
+
   useEffect(() => {
     if (lastTx) {
       const timer = setTimeout(() => {
@@ -67,15 +90,15 @@ export const Dashboard = () => {
 
   const exportPDF = () => window.open(`${API_BASE}/rapor/pdf`, '_blank');
 
-  const handleUndo = async () => {
-    if (!lastTx) return;
-    try {
-      // Dinamik API_BASE kullanımı
-      await fetch(`${API_BASE}/islemler/${lastTx.id}`, { method: 'DELETE' });
-    } catch (err) {
-      console.error("Geri alma hatası:", err);
-    }
-  };
+  
+const handleUndo = async (id) => {
+  try {
+    await axios.delete(`${API_BASE}/islemler/${id}`);
+    // Not: setİslemler falan yapmana gerek yok, Backend WebSocket'ten "UNDO_TX" fırlatacak ve useSocket.js bunu halledecek.
+  } catch (error) {
+    alert("İşlem silinirken hata oluştu.");
+  }
+};
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto min-h-[calc(100vh-4rem)]">
@@ -125,21 +148,32 @@ export const Dashboard = () => {
         <StatCard label="Piyasa P/L"     value={piyasaPL.toFixed(2)}     unit="TL" icon={Activity}      color="ink"     />
       </div>
 
-      {/* Kasa + Tablo */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <div className="lg:col-span-1">
+        {/* SOL KOLON: Kasa Bilgisi ve Manuel Giriş Formu */}
+        <div className="lg:col-span-1 space-y-6">
           <KasaCard miktar={toplamHas} gunlukAlis={gunlukAlis} gunlukSatis={gunlukSatis} />
+          
+          {/* Yeni Bileşen Buraya Geldi */}
+          <ManualIslemForm /> 
         </div>
+
+        {/* SAĞ KOLON: Tablo */}
         <div className="lg:col-span-2">
-          <FilterBar onExport={exportPDF} filters={filters} onChange={setFilters} />
-          {loading && (
-            <div className="mb-3 rounded-xl border border-ink-200 bg-ink-50 px-4 py-2 text-sm font-semibold text-ink-600">
-              İşlemler yükleniyor...
-            </div>
-          )}
-          <IslemTable islemler={filtrelenmis} onUndo={handleUndoById} />
+          <FilterBar 
+          onExport={exportPDF} 
+          filters={filters} 
+          onChange={setFilters} 
+        />
+          <IslemTable 
+   islemler={filteredIslemler} 
+   onUndo={handleUndo} 
+   onEdit={handleEdit} 
+   loading={loading} />
         </div>
       </div>
+      
+      {/* Sesli Asistan Butonu vb. */}
+      <VoiceAssistantUI state={voiceState} />
     </div>
   );
 };

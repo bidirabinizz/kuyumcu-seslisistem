@@ -17,7 +17,7 @@ const MiniBarChart = ({ data, renk }) => {
             className={`w-full rounded-sm transition-all ${renk}`}
             style={{ height: `${(d.deger / max) * 56}px`, minHeight: d.deger > 0 ? 2 : 0 }}
           />
-          <div className="absolute bottom-full mb-1 hidden group-hover:block bg-ink-800 text-black text-[10px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+          <div className="absolute bottom-full mb-2 hidden group-hover:block bg-ink-800 text-white text-[12px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap z-10">
             {d.label}: {d.deger.toFixed(2)} gr
           </div>
         </div>

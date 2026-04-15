@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Download, Filter, CalendarDays, ChevronDown } from 'lucide-react';
+import { API_BASE } from '../config';
 
 export const FilterBar = ({ onExport, filters, onChange }) => {
   const [personeller, setPersoneller] = useState([]);
 
   // Veritabanından gerçek personelleri çekiyoruz
   useEffect(() => {
-    fetch('http://localhost:8000/personeller')
+    fetch(`${API_BASE}/personeller`)
       .then(res => res.json())
       .then(data => setPersoneller(data))
       .catch(err => console.error("Personel listesi yüklenemedi:", err));

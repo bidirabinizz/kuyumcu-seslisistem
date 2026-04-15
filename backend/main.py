@@ -52,10 +52,14 @@ SAYILAR = {
     "beş": 5,     "altı": 6,   "yedi": 7,   "sekiz": 8, "dokuz": 9,
     "on": 10,     "yirmi": 20, "otuz": 30,  "kırk": 40, "elli": 50,
     "altmış": 60, "yetmiş": 70,"seksen": 80,"doksan": 90,"yüz": 100,
+    "bin": 1000, "onbin":10000, "yüzbin":100000, "milyon": 1000000,
     "buçuk": 0.5,
 }
 
-WHISPER_PROMPT  = "satış, alış, gram, ayar, yirmi iki, on dört, yirmi dört, buçuk, has, miktar"
+WHISPER_PROMPT = (
+    "alış satış gram ayar yirmi iki on dört yirmi dört on sekiz buçuk "
+    "has miktar fiyat lira kaydet evet hayır tamam iptal sil geri al"
+)
 COOLDOWN_SANIYE = 3
 TEMP_WAV        = "temp_islem.wav"
 
@@ -72,7 +76,6 @@ whisper_model = None
 # WEBSOCKET YÖNETİCİSİ
 # ─────────────────────────────────────────────
 async def tts_ve_gonder(personel_id: int, metin: str):
-    """Metni sese çevirir ve ilgili personelin WebSocket kanalına gönderir."""
     try:
         communicate = edge_tts.Communicate(metin, "tr-TR-AhmetNeural")
         audio_data = b""
@@ -80,8 +83,18 @@ async def tts_ve_gonder(personel_id: int, metin: str):
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
         
+        # 1. Önce Flutter'a süreyi bildir (milisaniye cinsinden)
+        # MP3 bitrate tahmini: edge_tts çıktısı ~32kbps
+        estimated_ms = max(1500, int(len(audio_data) / 4000))
+        await manager.send_text(personel_id, f"TTS_START:{estimated_ms}")
+        
+        # Kısa bekle ki Flutter mesajı işlesin
+        await asyncio.sleep(0.05)
+        
+        # 2. Sonra sesi gönder
         await manager.send_audio(personel_id, audio_data)
-        print(f"🔊 Personel {personel_id} için sesli geri bildirim gönderildi.")
+        
+        print(f"🔊 Personel {personel_id} → ses gönderildi (~{estimated_ms}ms)")
     except Exception as e:
         print(f"⚠️ TTS Hatası: {e}")
         await manager.send_text(personel_id, f"MESAJ: {metin}")
@@ -211,6 +224,13 @@ class PersonelPayload(BaseModel):
     tetikleme_kelimesi: str
     rol: str
 
+class IslemPayload(BaseModel):
+    personel_id: int
+    islem_tipi: str      # "ALIS" veya "SATIS"
+    urun_cinsi: str      # "24_AYAR", "22_AYAR", "18_AYAR", "14_AYAR"
+    brut_miktar: float   # Gram cinsinden
+    birim_fiyat: float   # İşlemin yapıldığı TL fiyatı (Birim veya Toplam, DB mantığına göre)
+
 
 def normalize_tetikleme_kelimesi(kelime: str) -> str:
     return kelime.strip().lower()
@@ -317,7 +337,7 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
             data = await websocket.receive_bytes()
             audio_buffer.extend(data)
 
-            # ── AŞAMA 1: Wake Word ─────────────────────────
+           # ── AŞAMA 1: Wake Word ─────────────────────────
             if state == "WAKE_WORD":
                 if recognizer.AcceptWaveform(bytes(data)):
                     metin = json.loads(recognizer.Result()).get("text", "")
@@ -328,17 +348,38 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
                             audio_buffer.clear()
                             recognizer.Reset()
                             await manager.send_text(personel_id, "DİNLİYORUM")
+                            
+                            # EKLENEN SATIR: Asistanın kulaklığa sesli olarak yanıt vermesi için
+                            await tts_ve_gonder(personel_id, "Dinliyorum.")
+                            
                             await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "LISTENING", "personel_id": personel_id}))
                             break
 
             # ── AŞAMA 2: Komut Analizi ──────────────────
             elif state == "COMMAND":
-                if len(audio_buffer) >= 16000 * 2 * 4: # 4 saniye
+                # VOSK'a sesi göndererek kullanıcının cümleyi bitirip es (duraksama) vermesini bekle
+                cumle_bitti = recognizer.AcceptWaveform(bytes(data))
+                
+                zaman_doldu = len(audio_buffer) >= 16000 * 2 * 6  # Maksimum 6 saniye süre tanı
+                min_sure_gecti = len(audio_buffer) > 16000 * 2 * 2.5 # "Dinliyorum" sesinin bitmesi için en az 2.5 sn bekle
+                
+                # Kullanıcı sustuysa (ve en az 2.5 sn geçtiyse) VEYA 6 saniyelik maksimum sınır dolduysa
+                if (cumle_bitti and min_sure_gecti) or zaman_doldu:
                     await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "THINKING", "personel_id": personel_id}))
                     
                     audio_np = (np.frombuffer(bytes(audio_buffer), dtype=np.int16).astype(np.float32) / 32768.0)
                     loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(None, lambda: whisper_model.transcribe(audio_np, language="tr", fp16=False))
+                    result = await loop.run_in_executor(
+    None,
+    lambda: whisper_model.transcribe(
+        audio_np,
+        language="tr",
+        fp16=False,
+        initial_prompt=WHISPER_PROMPT,  # ← BUNU EKLE
+        temperature=0.0,                # ← Deterministic, hallüsinasyon azalır
+        condition_on_previous_text=False,  # ← Önceki metne bağlı kalmasın
+    )
+)
                     komut_metni = result["text"].strip()
                     islem = sesli_komutu_ayristir(komut_metni, personel_id)
 
@@ -365,34 +406,53 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
                         else:
                             await tts_ve_gonder(personel_id, "Silinecek işlem bulunamadı.")
                             state = "WAKE_WORD"
+                            recognizer.Reset() # HATA DURUMUNDA SIFIRLA
                         audio_buffer.clear()
 
                     # DURUM B: Normal İşlem Kaydı
                     elif islem.get("tip") == "NORMAL_TX":
                         tip_metin = "alış" if islem["islem_tipi"] == "ALIS" else "satış"
-                        onay_metni = f"{islem['brut_miktar']} gram {islem['urun_cinsi'].split('_')[0]} ayar {tip_metin}, onay mı?"
+                        onay_metni = f"{islem['brut_miktar']} gram {islem['urun_cinsi'].split('_')[0]} ayar {tip_metin}, işlemi kaydedeyim mi?"
                         pending_tx = islem
+                        
+                        await manager.broadcast_text(json.dumps({
+                            "type": "VOICE_STATE", 
+                            "state": "CONFIRMING", 
+                            "personel_id": personel_id,
+                            "islem": islem
+                        }))
+                        
                         await tts_ve_gonder(personel_id, onay_metni)
                         state = "CONFIRM"
                         audio_buffer.clear()
+                        recognizer.Reset()
                     
                     # DURUM C: Hata
                     else:
                         await manager.send_text(personel_id, f"HATA:{islem.get('hata')}")
                         state = "WAKE_WORD"
                         audio_buffer.clear()
+                        recognizer.Reset()  # ÇOK ÖNEMLİ: Kendi kendine uyanma döngüsünü tamamen kırar!
 
             # ── AŞAMA 3: Onay Dinleme ─────────────────────────────
             elif state in ["CONFIRM", "CONFIRM_UNDO"]:
                 if recognizer.AcceptWaveform(bytes(data)):
                     metin = json.loads(recognizer.Result()).get("text", "").lower()
-                    evet_mi = any(k in metin for k in ["onay", "evet", "tamam", "sil"])
-                    hayir_mi = any(k in metin for k in ["iptal", "hayır", "dur"])
+                    
+                    # YENİ KONTROL: Sadece bu kesin kelimeleri söylerse işlemi yap
+                    evet_mi = any(k in metin for k in ["evet", "tamam", "onaylıyorum", "kaydet", "doğru"])
+                    hayir_mi = any(k in metin for k in ["hayır", "iptal", "dur", "onaylamıyorum", "yanlış"])
 
                     if evet_mi:
                         if state == "CONFIRM" and pending_tx:
-                            veritabanina_yaz(pending_tx)
-                            await tts_ve_gonder(personel_id, "İşlem kaydedildi.")
+                            # İşlemi yap ve sonucu kontrol et
+                            basarili_mi = veritabanina_yaz(pending_tx)
+                            
+                            if basarili_mi:
+                                await tts_ve_gonder(personel_id, "İşlem kaydedildi.")
+                            else:
+                                await tts_ve_gonder(personel_id, "Kayıt başarısız oldu, lütfen ekranı kontrol edin.")
+                                
                         elif state == "CONFIRM_UNDO" and pending_undo_id:
                             islem_sil_ve_geri_al(pending_undo_id)
                             await tts_ve_gonder(personel_id, "İşlem silindi.")
@@ -465,36 +525,54 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     metin = metni_sayiya_dok(ham_metin)
     print(f"  [İşlenen metin]: {metin}")
 
-    # --- GERİ ALMA / SİLME KOMUTU KONTROLÜ ---
+    # Geri alma kontrolü
     silme_kelimeleri = ["sil", "iptal et", "geri al", "son işlemi", "yanlış oldu"]
     if any(k in metin for k in silme_kelimeleri):
         return {"tip": "UNDO_REQUEST", "personel_id": personel_id}
 
-    # --- NORMAL İŞLEM AYRIŞTIRMA ---
-    if "alış" in metin or "alıs" in metin:
+    # İşlem tipi
+    if "alış" in metin or "alıs" in metin or "aliş" in metin or "alis" in metin:
         islem_tipi = "ALIS"
-    elif "satış" in metin or "satis" in metin:
+    elif "satış" in metin or "satis" in metin or "satiş" in metin:
         islem_tipi = "SATIS"
     else:
-        return {"hata": "İşlem tipi (Alış/Satış) bulunamadı."}
+        return {"hata": f"İşlem tipi bulunamadı. Duyulan: {ham_metin}"}
 
+    # Ayar tespiti
     ayar_match = re.search(r"\b(14|18|22|24)\b", metin)
     if not ayar_match:
-        return {"hata": "Altın ayarı bulunamadı."}
-
+        return {"hata": f"Altın ayarı bulunamadı. Duyulan: {ham_metin}"}
+    
     ayar_degeri = ayar_match.group(1)
-    urun_cinsi  = f"{ayar_degeri}_AYAR"
+    urun_cinsi = f"{ayar_degeri}_AYAR"
+    ayar_pos = ayar_match.start()  # Ayarın metindeki konumu
 
+    # Miktar: ayar sayısından SONRA gelen ilk sayıyı al
+    # "alış 24 ayar 24 gram" → ayar=24, sonrasında "24 gram" var → miktar=24
+    metin_sonrasi = metin[ayar_pos + len(ayar_degeri):]
+    miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", metin_sonrasi)
+    
+    if not miktar_match:
+        # Ayardan önce de dene (örn: "24 gram 24 ayar alış")
+        metin_oncesi = metin[:ayar_pos]
+        miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", metin_oncesi)
+    
+    if not miktar_match:
+        return {"hata": f"Miktar (gram) bulunamadı. Duyulan: {ham_metin}"}
+
+    brut_miktar = float(miktar_match.group(1).replace(",", "."))
+    
+    # Sıfır miktar kontrolü
+    if brut_miktar <= 0:
+        return {"hata": f"Geçersiz miktar: {brut_miktar}"}
+
+    # Fiyat (opsiyonel)
     fiyat_match = re.search(r"(?:fiyat|tutar|lira)\s*(\d+(?:\.\d+)?)", metin)
     birim_fiyat = float(fiyat_match.group(1)) if fiyat_match else 0.0
 
-    kalan = metin.replace(ayar_degeri, "", 1)
-    miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", kalan)
-    if not miktar_match:
-        return {"hata": "Miktar (gram) bulunamadı."}
-
-    brut_miktar = float(miktar_match.group(1).replace(",", "."))
     milyem = MILYEM_MAP.get(urun_cinsi, 0.0)
+    
+    print(f"  [Ayristirma]: tip={islem_tipi}, ayar={urun_cinsi}, miktar={brut_miktar}, milyem={milyem}")
 
     return {
         "tip": "NORMAL_TX",
@@ -503,22 +581,24 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
         "urun_cinsi": urun_cinsi,
         "brut_miktar": brut_miktar,
         "birim_fiyat": birim_fiyat,
-        "milyem": milyem
+        "milyem": milyem,
     }
 
 
 # ─────────────────────────────────────────────
 # VERİTABANI
 # ─────────────────────────────────────────────
-def veritabanina_yaz(islem: dict):
+def veritabanina_yaz(islem: dict) -> bool:
     try:
         conn   = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
+        
+        # DİKKAT: Yorum satırı SQL sorgusunun içinden kaldırıldı!
         cursor.execute(
             """
             INSERT INTO islemler (personel_id, islem_tipi, urun_cinsi, brut_miktar, milyem, birim_fiyat)
             VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id, net_has_miktar;  # YENİ: id bilgisini de istiyoruz
+            RETURNING id, net_has_miktar;
             """,
             (
                 islem["personel_id"],
@@ -529,13 +609,19 @@ def veritabanina_yaz(islem: dict):
                 islem["birim_fiyat"],
             ),
         )
-        row_id, net_has = cursor.fetchone()  # YENİ: row_id'yi aldık
-        net_has = float(net_has)
+        row = cursor.fetchone()
+        
+        if not row:
+            raise Exception("Veritabanı id döndürmedi.")
+            
+        row_id, net_has = row
+        net_has = float(net_has if net_has is not None else 0.0)
+        
         conn.commit()
         cursor.close()
         conn.close()
 
-        # Dashboard'a yeni işlem olarak fırlat (type ve id eklendi)
+        # Dashboard'a yeni işlem olarak fırlat
         payload = json.dumps({
             "type":   "NEW_TX",
             "id":     row_id,
@@ -545,9 +631,12 @@ def veritabanina_yaz(islem: dict):
             "has":    net_has,
         }, ensure_ascii=False)
         broadcast_from_thread(payload)
+        
+        return True # Başarılı olduğunu bildir
 
     except Exception as e:
         print(f"  [DB HATA]: {e}")
+        return False # Başarısız olduğunu bildir
 
 
 # ─────────────────────────────────────────────
@@ -638,7 +727,8 @@ def _query_islemler(conn, gunler, tip=None, personel_id=None, limit=None):
     query = """
         SELECT i.id, i.islem_tarihi, i.islem_tipi, i.urun_cinsi,
                i.brut_miktar, i.net_has_miktar, i.birim_fiyat,
-               COALESCE(p.ad_soyad, 'Bilinmiyor') AS personel_ad_soyad
+               COALESCE(p.ad_soyad, 'Bilinmiyor') AS personel_ad_soyad,
+               i.personel_id
         FROM islemler i
         LEFT JOIN personeller p ON p.id = i.personel_id
         WHERE i.islem_tarihi >= NOW() - (%s * INTERVAL '1 day')
@@ -690,6 +780,81 @@ def personelleri_getir():
         if cursor: cursor.close()
         if conn: conn.close()
 
+@app.post("/islemler")
+async def manuel_islem_ekle(payload: IslemPayload):
+    """
+    Frontend (Web) üzerinden manuel alış/satış işlemi ekler.
+    Has hesaplamasını Python tarafında yaparak veritabanı hatalarını (NoneType) önler.
+    """
+    conn = None
+    try:
+        # 1. Veri Validasyonu
+        islem_tipi = payload.islem_tipi.strip().upper()
+        if islem_tipi not in ["ALIS", "SATIS"]:
+            raise HTTPException(status_code=400, detail="Geçersiz işlem tipi.")
+
+        urun_cinsi = payload.urun_cinsi.strip().upper()
+        milyem = MILYEM_MAP.get(urun_cinsi)
+        if milyem is None:
+            raise HTTPException(status_code=400, detail="Geçersiz ayar.")
+
+        # 🌟 KRİTİK DÜZELTME: Has miktarını veritabanına bırakmadan biz hesaplıyoruz
+        brut = float(payload.brut_miktar)
+        hesaplanan_has = brut * milyem
+
+        # 2. Veritabanına Yazma İşlemi
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO islemler (personel_id, islem_tipi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
+            """,
+            (
+                payload.personel_id,
+                islem_tipi,
+                urun_cinsi,
+                brut,
+                milyem,
+                payload.birim_fiyat,
+                hesaplanan_has  # 👈 Hesaplanan net_has_miktar direkt DB'ye yazılıyor
+            ),
+        )
+        
+        # Artık veritabanından has miktarını sormuyoruz, sadece kaydın ID'sini alıyoruz
+        row_id = cursor.fetchone()[0]
+        conn.commit()
+        cursor.close()
+
+        # 3. WebSocket ile Tüm Ekranlara (Dashboard) Anlık Bildirim
+        ws_payload = json.dumps({
+            "type":   "NEW_TX",
+            "id":     row_id,
+            "tip":    islem_tipi,
+            "miktar": brut,
+            "ayar":   urun_cinsi,
+            "has":    hesaplanan_has,
+        }, ensure_ascii=False)
+        
+        await manager.broadcast_text(ws_payload)
+
+        return {
+            "id": row_id,
+            "mesaj": "Manuel işlem başarıyla kaydedildi.",
+            "net_has_miktar": hesaplanan_has
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        # Hatayı konsola daha detaylı yazdırmak için:
+        print(f"❌ [MANUEL İŞLEM HATASI]: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn: conn.close()
 
 @app.post("/personeller")
 def personel_ekle(payload: PersonelPayload):
@@ -830,6 +995,7 @@ def islemleri_getir(
                 "net_has_miktar": float(r[5]) if r[5] is not None else 0.0,
                 "birim_fiyat": float(r[6]) if r[6] is not None else 0.0,
                 "personel_ad_soyad": r[7],
+                "personel_id": r[8],
             }
             for r in rows
         ]
@@ -848,6 +1014,59 @@ def aktif_personeller():
     """
     # manager instance'ı içerisindeki dictionary'nin key'leri personel_id'lerdir
     return list(manager.active_connections.keys())
+
+@app.put("/islemler/{islem_id}")
+async def islem_duzenle(islem_id: int, payload: IslemPayload):
+    conn = None
+    try:
+        # Validasyon ve Has Hesaplama
+        islem_tipi = payload.islem_tipi.strip().upper()
+        urun_cinsi = payload.urun_cinsi.strip().upper()
+        milyem = MILYEM_MAP.get(urun_cinsi)
+        brut = float(payload.brut_miktar)
+        hesaplanan_has = brut * milyem
+
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        # UI'da kasayı doğru hesaplamak için eski verileri öğreniyoruz
+        cursor.execute("SELECT islem_tipi, net_has_miktar FROM islemler WHERE id = %s", (islem_id,))
+        old_row = cursor.fetchone()
+        if not old_row:
+            raise HTTPException(status_code=404, detail="İşlem bulunamadı.")
+        old_tip, old_has = old_row
+
+        # Güncelleme
+        cursor.execute(
+            """
+            UPDATE islemler
+            SET islem_tipi=%s, urun_cinsi=%s, brut_miktar=%s, milyem=%s, birim_fiyat=%s, net_has_miktar=%s
+            WHERE id=%s
+            """,
+            (islem_tipi, urun_cinsi, brut, milyem, payload.birim_fiyat, hesaplanan_has, islem_id)
+        )
+        conn.commit()
+        cursor.close()
+
+        # WebSocket üzerinden "Güncelleme Yapıldı" anonsu (Böylece Dashboard f5 atmadan yenilenir)
+        ws_payload = json.dumps({
+            "type": "UPDATE_TX",
+            "id": islem_id,
+            "tip": islem_tipi,
+            "miktar": brut,
+            "ayar": urun_cinsi,
+            "has": hesaplanan_has,
+            "eski_tip": old_tip,
+            "eski_has": float(old_has)
+        }, ensure_ascii=False)
+        await manager.broadcast_text(ws_payload)
+
+        return {"mesaj": "İşlem başarıyla güncellendi"}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn: conn.close()
 
 @app.get("/personeller/istatistik")
 def personel_istatistikleri():

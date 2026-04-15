@@ -23,13 +23,14 @@ export const useSocket = (url) => {
     zaman: row.islem_tarihi ? new Date(row.islem_tarihi).toLocaleTimeString('tr-TR') : '—',
     islem_tarihi: row.islem_tarihi,
     personel_ad_soyad: row.personel_ad_soyad,
+    personel_id: row.personel_id,
     birim_fiyat: Number(row.birim_fiyat || 0),
   });
 
   const initialFetch = useCallback(async () => {
     try {
       setLoading(true);
-      // ARTIK DİNAMİK: localhost yerine API_BASE kullanılıyor
+      
       const res = await fetch(`${API_BASE}/islemler?gunler=30&limit=15`);
       const data = await res.json();
       if (res.ok) {
@@ -68,20 +69,58 @@ export const useSocket = (url) => {
 
           // 2. İŞLEM GERİ ALMA (TABLOYU VE KASAYI ANLIK DÜZELTİR)
           if (data.type === 'UNDO_TX') {
-            setIslemler(prev => prev.filter(i => i.id !== data.id)); // Listeden anında uçur
-            // Kasayı tersine hesapla: Alış silindiyse çıkar, Satış silindiyse ekle
+            // Tablodan ilgili satırı anında kaldır
+            setIslemler(prev => prev.filter(i => i.id !== data.id));
+            
+            // Kasa bakiyesini tersine düzelt (Alış silindiyse çıkar, Satış silindiyse ekle)
             setToplamHas(prev => data.tip === 'ALIS' ? prev - data.has : prev + data.has);
-            setLastTx(null); // Eğer toast açıksa kapat
             return;
           }
 
+          if (data.type === 'UPDATE_TX') {
+            // Tablodaki ilgili satırın verilerini anında güncelle
+            setIslemler(prev => prev.map(i => {
+              if (i.id === data.id) {
+                return {
+                  ...i,
+                  tip: data.tip,
+                  ayar: data.ayar,
+                  miktar: Number(data.miktar || 0),
+                  has: Number(data.has || 0)
+                };
+              }
+              return i;
+            }));
+
+            // Kasa bakiyesini güncelle (Eski veriyi çıkar, yeni veriyi ekle)
+            setToplamHas(prev => {
+              let guncelKasa = prev;
+              // Önce eski işlemi kasadan temizle
+              guncelKasa = data.eski_tip === 'ALIS' ? guncelKasa - data.eski_has : guncelKasa + data.eski_has;
+              // Sonra yeni/düzenlenmiş halini kasaya işle
+              guncelKasa = data.tip === 'ALIS' ? guncelKasa + data.has : guncelKasa - data.has;
+              return guncelKasa;
+            });
+            return;
+          }
           // 3. YENİ İŞLEM GELDİĞİNDE
           if (data.type === 'NEW_TX') {
             const yeniIslem = { 
-              ...data, 
-              ayar: data.ayar, // Backend'den gelen formatı koru
-              zaman: new Date().toLocaleTimeString('tr-TR') 
+              id: data.id,
+              tip: data.tip,
+              ayar: data.ayar,
+              miktar: Number(data.miktar || 0),
+              has: Number(data.has || 0),
+              zaman: new Date().toLocaleTimeString('tr-TR'),
+              
+              // 🌟 KRİTİK EKLENTİ: Filtrelemenin bu işlemi ekranda gösterebilmesi için ISO formatında tarih
+              islem_tarihi: new Date().toISOString(), 
+              
+              personel_id: data.personel_id,
+              personel_ad_soyad: data.personel_ad_soyad || 'Sistem / Manuel',
+              birim_fiyat: Number(data.birim_fiyat || 0)
             };
+            
             setIslemler(prev => [yeniIslem, ...prev].slice(0, 100));
             setToplamHas(prev => data.tip === 'ALIS' ? prev + data.has : prev - data.has);
             setLastTx(yeniIslem); 
