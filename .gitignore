@@ -43,3 +43,4 @@ thumbs.db
 *.local
 *.sqlite
 *.db
+*.xlsx
