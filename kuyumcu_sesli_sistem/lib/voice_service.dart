@@ -7,15 +7,74 @@ import 'package:audioplayers/audioplayers.dart';
 
 import 'config.dart';
 
+/// Sesli komuttan ayrıştırılan işlem ön-izlemesi
+class IslemPreview {
+  final String islemTipi;    // "ALIS" | "SATIS"
+  final String kategori;     // "ALTIN" | "SARRAFIYE" | "PIRLANTA"
+  final String urunCinsi;    // "22_AYAR", "CEYREK_ALTIN" …
+  final double miktar;
+  final int adet;
+  final String odemeTipi;   // "NAKIT" | "KART"
+  final double netHas;
+  final String? uyari;
+
+  const IslemPreview({
+    required this.islemTipi,
+    required this.kategori,
+    required this.urunCinsi,
+    required this.miktar,
+    required this.adet,
+    required this.odemeTipi,
+    required this.netHas,
+    this.uyari,
+  });
+
+  factory IslemPreview.fromJson(Map<String, dynamic> j) {
+    return IslemPreview(
+      islemTipi: j['islem_tipi']     ?? j['tip']       ?? '',
+      kategori:  j['urun_kategorisi'] ?? 'ALTIN',
+      urunCinsi: j['urun_cinsi']     ?? '',
+      miktar:    (j['miktar']   ?? j['brut_miktar'] ?? 0).toDouble(),
+      adet:      (j['adet']     ?? 1).toInt(),
+      odemeTipi: j['odeme_tipi'] ?? 'NAKIT',
+      netHas:    (j['net_has']  ?? 0).toDouble(),
+      uyari:     j['uyari'],
+    );
+  }
+
+  /// Ekranda gösterilecek kısa açıklama
+  String get ozet {
+    final tipStr   = islemTipi == 'ALIS' ? 'ALIŞ' : 'SATIŞ';
+    final odemeStr = odemeTipi == 'KART' ? 'KARTLI' : 'NAKİT';
+
+    if (kategori == 'SARRAFIYE') {
+      final urunAd = urunCinsi
+          .replaceAll('_ALTIN', '')
+          .replaceAll('_', ' ')
+          .toUpperCase();
+      return '$adet Adet $urunAd · $tipStr · $odemeStr';
+    } else if (kategori == 'PIRLANTA') {
+      return '$adet Adet Pırlanta · $tipStr · $odemeStr';
+    } else {
+      final ayar = urunCinsi.replaceAll('_AYAR', '');
+      return '${miktar.toStringAsFixed(2)} gr $ayar Ayar · $tipStr · $odemeStr';
+    }
+  }
+}
+
 class VoiceService {
-  final void Function(String message)? onStatusChanged;
-  final void Function()? onDisconnected;
-  final void Function(double amplitude)? onAmplitudeChanged;
+  final void Function(String message)?         onStatusChanged;
+  final void Function()?                       onDisconnected;
+  final void Function(double amplitude)?       onAmplitudeChanged;
+  final void Function(IslemPreview? preview)?  onCommandPreview;
+  final void Function(int attempt, Duration nextRetry)? onReconnectAttempt;
 
   VoiceService({
     this.onStatusChanged,
     this.onDisconnected,
     this.onAmplitudeChanged,
+    this.onCommandPreview,
+    this.onReconnectAttempt,
   }) {
     _initAudioContext();
   }
@@ -36,79 +95,86 @@ class VoiceService {
         ),
       ));
     } catch (e) {
-      print("AudioContext hatası: $e");
+      print('AudioContext hatası: $e');
     }
   }
 
-  final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  final AudioRecorder _recorder    = AudioRecorder();
+  final AudioPlayer   _audioPlayer = AudioPlayer();
+
   WebSocketChannel? _channel;
   StreamSubscription? _wsSubscription;
   StreamSubscription? _audioSubscription;
 
-  bool _isListening = false;
-  bool _disposed = false;
-  bool _isManualStop = false;
-  int _reconnectCount = 0;
-  int? _lastPersonelId;
+  bool _isListening   = false;
+  bool _disposed      = false;
+  bool _isManualStop  = false;
 
-  // Mikrofonun kapalı tutulacağı süreyi Timer ile yönet
-  // PlayerState yerine kesin süreye dayalı yaklaşım
+  // Exponential backoff için durum
+  int      _reconnectCount = 0;
+  int?     _lastPersonelId;
+  Timer?   _reconnectTimer;
+
+  static const int    _maxReconnectDelaySec = 30;
+  static const int    _baseDelaySec         = 1;
+
+  // Mikrofon susturma (TTS çalarken)
   Timer? _muteTimer;
-  bool _isMuted = false;
+  bool   _isMuted = false;
 
+  // ── Bağlantı Kurma ───────────────────────────────────────────────────────────
   Future<bool> startStreaming(int personelId) async {
     if (_disposed) return false;
-    _lastPersonelId = personelId;
-    _isManualStop = false;
+    _lastPersonelId  = personelId;
+    _isManualStop    = false;
 
     final hasPermission = await _recorder.hasPermission();
     if (!hasPermission) return false;
 
     try {
       _channel = WebSocketChannel.connect(
-        Uri.parse("${AppConfig.wsBase}/$personelId"),
+        Uri.parse('${AppConfig.wsBase}/$personelId'),
       );
 
       await _channel!.ready.timeout(
         const Duration(seconds: 5),
-        onTimeout: () => throw TimeoutException("Bağlantı zaman aşımı"),
+        onTimeout: () => throw TimeoutException('Bağlantı zaman aşımı'),
       );
+
+      // Başarılı bağlantı → backoff sıfırla
+      _reconnectCount = 0;
 
       _wsSubscription = _channel!.stream.listen(
         (message) {
           if (_disposed) return;
-
           if (message is Uint8List) {
-            // Ses verisi geldi → çal
             _audioPlayer.play(BytesSource(message));
           } else if (message is String) {
             _handleTextMessage(message);
           }
         },
-        onError: (e) => _handleDisconnect(),
-        onDone: () => _handleDisconnect(),
+        onError: (_) => _handleDisconnect(),
+        onDone: ()  => _handleDisconnect(),
       );
 
       const config = RecordConfig(
-  encoder: AudioEncoder.pcm16bits,
-  sampleRate: 16000,
-  numChannels: 1,
-  echoCancel: true,   // Hoparlörden konuşuyorsan true, kulaklıkta false yap
-  noiseSuppress: true,
-  autoGain: true,
-  bitRate: 128000,
-);
+        encoder:     AudioEncoder.pcm16bits,
+        sampleRate:  16000,
+        numChannels: 1,
+        echoCancel:  true,
+        noiseSuppress: true,
+        autoGain:    true,
+        bitRate:     128000,
+      );
 
       final stream = await _recorder.startStream(config);
       _isListening = true;
-      _reconnectCount = 0;
 
       _audioSubscription = stream.listen((data) {
         if (!_isListening || _disposed) return;
 
         if (_isMuted) {
-          // Sessizlik gönder — sunucu bağlantıyı kopuk sanmasın
+          // Sessiz veri gönder — bağlantıyı ayakta tutar
           _channel?.sink.add(Uint8List(data.length));
         } else {
           _channel?.sink.add(data);
@@ -124,13 +190,13 @@ class VoiceService {
     }
   }
 
+  // ── Metin Mesaj İşleyici ──────────────────────────────────────────────────────
   void _handleTextMessage(String message) {
-    // "TTS_START:1800" formatı → 1800ms mikrofonu kapat
+    // "TTS_START:1800" → mikrofonu kapat
     if (message.startsWith('TTS_START:')) {
-      final msStr = message.substring('TTS_START:'.length);
-      final ms = int.tryParse(msStr);
+      final ms = int.tryParse(message.substring('TTS_START:'.length));
       if (ms != null) {
-        _muteMicrophone(Duration(milliseconds: ms + 400)); // +400ms güvenlik payı
+        _muteMicrophone(Duration(milliseconds: ms + 400));
       }
       return;
     }
@@ -138,79 +204,110 @@ class VoiceService {
     // JSON mesajlar
     if (message.trim().startsWith('{')) {
       try {
-        final data = jsonDecode(message);
-        final type = data['type'];
+        final data  = jsonDecode(message) as Map<String, dynamic>;
+        final type  = data['type'];
         final state = data['state'];
+
         if (type == 'VOICE_STATE') {
-          if (state == 'CONFIRMING') {
-            onStatusChanged?.call("ONAY BEKLENİYOR...");
-          } else if (state == 'IDLE') {
-            onStatusChanged?.call("UYANIYOR...");
-          } else if (state == 'LISTENING') {
-            onStatusChanged?.call("DİNLİYOR...");
-          } else if (state == 'THINKING') {
-            onStatusChanged?.call("DÜŞÜNÜYOR...");
+          switch (state) {
+            case 'CONFIRMING':
+              onStatusChanged?.call('ONAY BEKLENİYOR...');
+              // İşlem önizlemesini üst katmana ilet
+              if (data['islem'] != null) {
+                try {
+                  final preview = IslemPreview.fromJson(
+                    Map<String, dynamic>.from(data['islem']),
+                  );
+                  onCommandPreview?.call(preview);
+                } catch (_) {}
+              }
+              break;
+            case 'IDLE':
+              onStatusChanged?.call('UYANIYOR...');
+              onCommandPreview?.call(null); // önizlemeyi temizle
+              break;
+            case 'LISTENING':
+              onStatusChanged?.call('DİNLİYOR...');
+              onCommandPreview?.call(null);
+              break;
+            case 'THINKING':
+              onStatusChanged?.call('DÜŞÜNÜYOR...');
+              break;
           }
         }
       } catch (_) {}
       return;
     }
 
-    // Düz metin mesajlar
+    // Hata / düz metin mesajlar
+    if (message.startsWith('HATA:')) {
+      onStatusChanged?.call('⚠ ${message.substring(5).toUpperCase()}');
+      onCommandPreview?.call(null);
+      return;
+    }
+
     onStatusChanged?.call(message.toUpperCase());
   }
 
-  /// Mikrofonu belirtilen süre boyunca sessizleştirir.
-  /// Birden fazla TTS art arda gelirse timer sıfırlanır.
+  // ── Mikrofon Susturma ─────────────────────────────────────────────────────────
   void _muteMicrophone(Duration duration) {
     _muteTimer?.cancel();
     _isMuted = true;
-    print("🔇 Mikrofon ${duration.inMilliseconds}ms susturuldu");
+    print('🔇 Mikrofon ${duration.inMilliseconds}ms susturuldu');
 
     _muteTimer = Timer(duration, () {
       if (!_disposed) {
         _isMuted = false;
-        print("🎤 Mikrofon tekrar açıldı");
+        print('🎤 Mikrofon tekrar açıldı');
       }
     });
   }
 
+  // ── Amplitude Hesaplama ───────────────────────────────────────────────────────
   void _calculateAmplitude(Uint8List data) {
     if (onAmplitudeChanged == null) return;
     int maxVal = 0;
-    for (int i = 0; i < data.length; i += 2) {
-      if (i + 1 >= data.length) break;
+    for (int i = 0; i < data.length - 1; i += 2) {
       int sample = ByteData.sublistView(data, i, i + 2).getInt16(0, Endian.little);
       if (sample.abs() > maxVal) maxVal = sample.abs();
     }
-    double normalized = (maxVal / 32768.0).clamp(0.0, 1.0);
+    final normalized = (maxVal / 32768.0).clamp(0.0, 1.0);
     onAmplitudeChanged!(normalized);
   }
 
+  // ── Exponential Backoff Reconnect ─────────────────────────────────────────────
   void _handleDisconnect() {
     if (_disposed || _isManualStop) return;
 
-    if (_reconnectCount < 3) {
-      _reconnectCount++;
-      onStatusChanged?.call("BAĞLANTI KOPTU, DENENİYOR... ($_reconnectCount/3)");
-      Timer(const Duration(seconds: 2), () {
-        if (_lastPersonelId != null) startStreaming(_lastPersonelId!);
-      });
-    } else {
-      onStatusChanged?.call("SUNUCUYA ERİŞİLEMİYOR");
-      onDisconnected?.call();
-      _cleanup();
-    }
+    // Delay hesapla: 1s → 2s → 4s … max 30s
+    final delaySec = (_baseDelaySec * (1 << _reconnectCount)).clamp(1, _maxReconnectDelaySec);
+    final delay    = Duration(seconds: delaySec);
+
+    _reconnectCount++;
+    onReconnectAttempt?.call(_reconnectCount, delay);
+    onStatusChanged?.call('BAĞLANTI KOPTU · ${delaySec}SN SONRA YENİDEN...');
+
+    print('⚡ Reconnect #$_reconnectCount — ${delaySec}sn sonra denenecek');
+
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, () async {
+      if (!_disposed && !_isManualStop && _lastPersonelId != null) {
+        final basarili = await startStreaming(_lastPersonelId!);
+        if (!basarili) _handleDisconnect(); // tekrar dene
+      }
+    });
   }
 
+  // ── Durdurma ─────────────────────────────────────────────────────────────────
   void stopStreaming() {
     _isManualStop = true;
+    _reconnectTimer?.cancel();
     _cleanup();
   }
 
   Future<void> _cleanup() async {
     _isListening = false;
-    _isMuted = false;
+    _isMuted     = false;
     _muteTimer?.cancel();
     _muteTimer = null;
     await _audioSubscription?.cancel();
@@ -222,10 +319,12 @@ class VoiceService {
     _channel = null;
     await _audioPlayer.stop();
     onAmplitudeChanged?.call(0.0);
+    onCommandPreview?.call(null);
   }
 
   Future<void> dispose() async {
     _disposed = true;
+    _reconnectTimer?.cancel();
     await _cleanup();
     await _recorder.dispose();
     await _audioPlayer.dispose();

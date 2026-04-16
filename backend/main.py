@@ -48,12 +48,38 @@ MILYEM_MAP = {
     "14_AYAR": 0.5850,
 }
 
-# YENİ SABİTLER: Sarrafiye için standart adet->has dönüşümü (Yaklaşık değerler, isteğe göre revize edilebilir)
-SARRAFIYE_MAP = {
-    "çeyrek": {"urun_cinsi": "CEYREK_ALTIN", "has_karsiligi": 1.605},  # ~1.75 gr * 0.916
-    "yarım": {"urun_cinsi": "YARIM_ALTIN", "has_karsiligi": 3.210},    # ~3.50 gr * 0.916
-    "tam": {"urun_cinsi": "TAM_ALTIN", "has_karsiligi": 6.420},        # ~7.00 gr * 0.916
-    "ata": {"urun_cinsi": "ATA_ALTIN", "has_karsiligi": 6.600},        # ~7.20 gr * 0.916
+# ─────────────────────────────────────────────
+# MERKEZİ SARRAFİYE KONFİGÜRASYONU (Tek Kaynak)
+# Gram ağırlıkları: Çeyrek 1.75g, Yarım 3.50g, Tam 7.00g, Ata 7.20g
+# Has = Gram * 0.9160 (22 Ayar milyemi)
+# ─────────────────────────────────────────────
+SARRAFIYE_CONFIG = {
+    "çeyrek": {
+        "urun_cinsi":    "CEYREK_ALTIN",
+        "gram_agirlik":  1.75,
+        "has_karsiligi": round(1.75 * 0.9160, 4),   # 1.6030
+    },
+    "yarım": {
+        "urun_cinsi":    "YARIM_ALTIN",
+        "gram_agirlik":  3.50,
+        "has_karsiligi": round(3.50 * 0.9160, 4),   # 3.2060
+    },
+    "tam": {
+        "urun_cinsi":    "TAM_ALTIN",
+        "gram_agirlik":  7.00,
+        "has_karsiligi": round(7.00 * 0.9160, 4),   # 6.4120
+    },
+    "ata": {
+        "urun_cinsi":    "ATA_ALTIN",
+        "gram_agirlik":  7.20,
+        "has_karsiligi": round(7.20 * 0.9160, 4),   # 6.5952
+    },
+}
+
+# Sarrafiye DB kodu → NLP anahtarı eşlemesi (güvenli ters arama için)
+SARRAFIYE_CINSI_MAP = {
+    cfg["urun_cinsi"]: cfg["has_karsiligi"]
+    for cfg in SARRAFIYE_CONFIG.values()
 }
 
 # Pırlanta tanıyıcı kelimeler
@@ -240,11 +266,13 @@ class PersonelPayload(BaseModel):
 class IslemPayload(BaseModel):
     personel_id: int
     islem_tipi: str      # "ALIS" veya "SATIS"
-    urun_cinsi: str      # "24_AYAR", "22_AYAR", "18_AYAR", "14_AYAR"
-    brut_miktar: float   # Gram cinsinden
-    birim_fiyat: float   # İşlemin yapıldığı TL fiyatı (Birim veya Toplam, DB mantığına göre)
+    urun_cinsi: str      # "24_AYAR", "22_AYAR", "18_AYAR", "14_AYAR", "CEYREK_ALTIN" vb.
+    brut_miktar: float   # Gram cinsinden (ALTIN) veya adet (SARRAFIYE/PIRLANTA)
+    birim_fiyat: float   # İşlemin yapıldığı TL fiyatı
     urun_kategorisi: str = "ALTIN"
     islem_birimi: str = "GRAM"
+    odeme_tipi: str = "NAKIT"   # "NAKIT" veya "KART"
+    adet: int = 1               # Sarrafiye ve pırlanta için adet
 
 
 def normalize_tetikleme_kelimesi(kelime: str) -> str:
@@ -437,8 +465,31 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
 
                     # DURUM B: Normal İşlem Kaydı
                     elif islem.get("tip") == "NORMAL_TX":
-                        tip_metin = "alış" if islem["islem_tipi"] == "ALIS" else "satış"
-                        onay_metni = f"{islem['brut_miktar']} gram {islem['urun_cinsi'].split('_')[0]} ayar {tip_metin}, işlemi kaydedeyim mi?"
+                        tip_metin     = "alış" if islem["islem_tipi"] == "ALIS" else "satış"
+                        odeme_str     = "kartlı" if islem.get("odeme_tipi") == "KART" else "nakit"
+                        kategori      = islem.get("urun_kategorisi", "ALTIN")
+
+                        if kategori == "SARRAFIYE":
+                            adet      = int(islem.get("miktar", 1))
+                            urun_adı  = islem["urun_cinsi"].replace("_ALTIN", "").replace("_", " ").title()
+                            onay_metni = (
+                                f"{adet} adet {urun_adı}, {odeme_str} {tip_metin}, "
+                                f"toplam {islem['net_has']:.3f} gram has. Kaydedeyim mi?"
+                            )
+                        elif kategori == "PIRLANTA":
+                            adet      = int(islem.get("miktar", 1))
+                            onay_metni = f"{adet} adet pırlanta, {odeme_str} {tip_metin}. Kaydedeyim mi?"
+                        else:
+                            onay_metni = (
+                                f"{islem['miktar']} gram {islem['urun_cinsi'].replace('_AYAR', '')} ayar, "
+                                f"{odeme_str} {tip_metin}. Kaydedeyim mi?"
+                            )
+
+                        # Varsa uyarıyı sesli bildir
+                        if islem.get("uyari"):
+                            await tts_ve_gonder(personel_id, f"Uyarı: {islem['uyari']}")
+                            await asyncio.sleep(0.1)
+
                         pending_tx = islem
                         
                         await manager.broadcast_text(json.dumps({
@@ -547,6 +598,17 @@ def metni_sayiya_dok(metin: str) -> str:
     return " ".join(yeni)
 
 
+def _odeme_tipini_ayristir(metin: str) -> str:
+    """
+    Metinden nakit/kart ödeme tipini ayıklar.
+    Bulunamazsa varsayılan 'NAKIT' döndürür.
+    """
+    kart_kelimeleri = ["kartlı", "kartla", "kart", "kredi", "banka", "pos", "temassız"]
+    if any(k in metin for k in kart_kelimeleri):
+        return "KART"
+    return "NAKIT"
+
+
 def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     # 1. Kelimeleri matematiksel sembollere çevir
     ham_metin = ham_metin.lower()
@@ -584,37 +646,64 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     fiyat_match = re.search(r"(?:fiyat|tutar|lira|dolar|euro)\s*(\d+(?:\.\d+)?)", metin)
     birim_fiyat = float(fiyat_match.group(1)) if fiyat_match else 0.0
 
+    # Ödeme tipini tüm senaryolar için şimdiden belirle (PIRLANTA senaryosu öncesi)
+    odeme_tipi = _odeme_tipini_ayristir(metin)
+
     # 💎 SENARYO 1: PIRLANTA KONTROLÜ (Adet Bazlı)
     pirlanta_kelimeler = ["pırlanta", "elmas", "tektaş", "beştaş"]
     if any(pk in metin for pk in pirlanta_kelimeler):
         adet_match = re.search(r"(\d+)\s*(?:adet|tane)?\s*(?:pırlanta|elmas|tektaş|beştaş)", metin)
-        miktar = float(adet_match.group(1)) if adet_match else 1.0
-        return {
+        uyari = None
+        if adet_match:
+            miktar = float(adet_match.group(1))
+        else:
+            miktar = 1.0
+            uyari = f"Adet bulunamadı, 1 adet varsayıldı. Duyulan: {ham_metin}"
+            print(f"  [UYARI] {uyari}")
+        sonuc = {
             "tip": "NORMAL_TX", "personel_id": personel_id, "islem_tipi": islem_tipi,
             "urun_kategorisi": "PIRLANTA", "urun_cinsi": "PIRLANTA",
-            "islem_birimi": "ADET", "miktar": miktar, "birim_fiyat": birim_fiyat,
-            "milyem": 0.0, "net_has": 0.0
+            "islem_birimi": "ADET", "miktar": miktar, "adet": int(miktar),
+            "birim_fiyat": birim_fiyat, "odeme_tipi": odeme_tipi,
+            "milyem": 0.0, "net_has": 0.0,
         }
+        if uyari:
+            sonuc["uyari"] = uyari
+        return sonuc
 
-    # 🪙 SENARYO 2: SARRAFİYE KONTROLÜ (Adet Bazlı)
-    sarrafiye_map = {
-        "çeyrek": {"urun_cinsi": "CEYREK_ALTIN", "has_karsiligi": 1.605},
-        "yarım": {"urun_cinsi": "YARIM_ALTIN", "has_karsiligi": 3.210},
-        "tam": {"urun_cinsi": "TAM_ALTIN", "has_karsiligi": 6.420},
-        "ata": {"urun_cinsi": "ATA_ALTIN", "has_karsiligi": 6.600},
-    }
-    sarrafiye_kelimesi = next((k for k in sarrafiye_map.keys() if k in metin), None)
+    # Ödeme tipini tüm senaryolar için şimdiden belirle
+    odeme_tipi = _odeme_tipini_ayristir(metin)
+
+    # 🪙 SENARYO 2: SARRAFİYE KONTROLÜ (Merkezi Config'den — Adet Bazlı)
+    sarrafiye_kelimesi = next((k for k in SARRAFIYE_CONFIG.keys() if k in metin), None)
     if sarrafiye_kelimesi:
-        adet_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:adet|tane)?\s*" + sarrafiye_kelimesi, metin)
-        miktar = float(adet_match.group(1)) if adet_match else 1.0
-        s_data = sarrafiye_map[sarrafiye_kelimesi]
-        hesaplanan_has = round(miktar * s_data["has_karsiligi"], 3)
-        return {
+        # Adet ayrıştır — kelimeden önce veya sonra sayı ara
+        adet_match = re.search(
+            r"(\d+(?:\.\d+)?)\s*(?:adet|tane)?\s*" + sarrafiye_kelimesi, metin
+        ) or re.search(
+            sarrafiye_kelimesi + r"\s*(?:adet|tane)?\s*(\d+(?:\.\d+)?)", metin
+        )
+
+        uyari = None
+        if adet_match:
+            miktar = float(adet_match.group(1))
+        else:
+            miktar = 1.0
+            uyari = f"Adet bulunamadı, 1 adet varsayıldı. Duyulan: {ham_metin}"
+            print(f"  [UYARI] {uyari}")
+
+        s_cfg = SARRAFIYE_CONFIG[sarrafiye_kelimesi]
+        hesaplanan_has = round(miktar * s_cfg["has_karsiligi"], 4)
+        sonuc = {
             "tip": "NORMAL_TX", "personel_id": personel_id, "islem_tipi": islem_tipi,
-            "urun_kategorisi": "SARRAFIYE", "urun_cinsi": s_data["urun_cinsi"],
-            "islem_birimi": "ADET", "miktar": miktar, "birim_fiyat": birim_fiyat,
-            "milyem": 0.0, "net_has": hesaplanan_has
+            "urun_kategorisi": "SARRAFIYE", "urun_cinsi": s_cfg["urun_cinsi"],
+            "islem_birimi": "ADET", "miktar": miktar, "adet": int(miktar),
+            "birim_fiyat": birim_fiyat, "odeme_tipi": odeme_tipi,
+            "milyem": 0.0, "net_has": hesaplanan_has,
         }
+        if uyari:
+            sonuc["uyari"] = uyari
+        return sonuc
 
     # 🏆 SENARYO 3: HAS ALTIN / HURDA (Mevcut Gramajlı Sistem)
     ayar_match = re.search(r"\b(14|18|22|24)\b", metin)
@@ -642,9 +731,9 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
         return {"hata": f"Geçersiz miktar: {miktar}"}
 
     milyem = MILYEM_MAP.get(urun_cinsi, 0.0)
-    hesaplanan_has = miktar * milyem
-    
-    print(f"  [Ayrıştırma]: tip={islem_tipi}, kategori=ALTIN, ayar={urun_cinsi}, miktar={miktar}, milyem={milyem}")
+    hesaplanan_has = round(miktar * milyem, 4)
+
+    print(f"  [Ayrıştırma]: tip={islem_tipi}, kategori=ALTIN, ayar={urun_cinsi}, miktar={miktar}gr, milyem={milyem}, odeme={odeme_tipi}")
 
     return {
         "tip": "NORMAL_TX",
@@ -653,69 +742,80 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
         "urun_kategorisi": "ALTIN",
         "islem_birimi": "GRAM",
         "urun_cinsi": urun_cinsi,
-        "miktar": miktar,            # Eski sistemde 'brut_miktar' idi, yenisine 'miktar' olarak adapte edildi.
-        "brut_miktar": miktar,       # Hata vermesin diye (geriye dönük uyumluluk) buraya da ekledik
+        "miktar": miktar,
+        "brut_miktar": miktar,   # geriye dönük uyumluluk
+        "adet": 1,
         "birim_fiyat": birim_fiyat,
+        "odeme_tipi": odeme_tipi,
         "milyem": milyem,
-        "net_has": hesaplanan_has
+        "net_has": hesaplanan_has,
     }
 
 
 # ─────────────────────────────────────────────
 # VERİTABANI
 # ─────────────────────────────────────────────
+#
+# MIGRATION SQL (İlk çalıştırmada bir kere manuel çalıştırın):
+# ALTER TABLE islemler ADD COLUMN IF NOT EXISTS odeme_tipi VARCHAR(10) DEFAULT 'NAKIT';
+# ALTER TABLE islemler ADD COLUMN IF NOT EXISTS adet INTEGER DEFAULT 1;
+#
 def veritabanina_yaz(islem: dict) -> bool:
     try:
         conn   = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
-        
-        # 1. Artık has hesaplamasını burada yapmıyoruz, çünkü sesli_komutu_ayristir 
-        # fonksiyonu bize hesaplanmış 'net_has' değerini doğrudan sözlük (dict) içinde gönderiyor.
-        
-        # 2. INSERT sorgusuna urun_kategorisi ve islem_birimi alanlarını ekliyoruz
+
         cursor.execute(
             """
-            INSERT INTO islemler 
-            (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO islemler
+            (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi,
+             brut_miktar, milyem, birim_fiyat, net_has_miktar, odeme_tipi, adet)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 islem["personel_id"],
                 islem["islem_tipi"],
-                islem.get("urun_kategorisi", "ALTIN"),  # Eski manuel işlemler patlamasın diye default: ALTIN
-                islem.get("islem_birimi", "GRAM"),      # Eski manuel işlemler patlamasın diye default: GRAM
+                islem.get("urun_kategorisi", "ALTIN"),
+                islem.get("islem_birimi", "GRAM"),
                 islem["urun_cinsi"],
-                islem["miktar"],                        # Artık gram (10.5) veya adet (3) olabilir
-                islem["milyem"],
-                islem["birim_fiyat"],
-                islem["net_has"]                        # 👈 Parser'dan gelen kesin has miktarı
+                islem["miktar"],
+                islem.get("milyem", 0.0),
+                islem.get("birim_fiyat", 0.0),
+                islem["net_has"],
+                islem.get("odeme_tipi", "NAKIT"),
+                islem.get("adet", 1),
             ),
         )
         row = cursor.fetchone()
-        
+
         if not row:
             raise Exception("Veritabanı id döndürmedi.")
-            
+
         row_id = row[0]
-        
         conn.commit()
         cursor.close()
         conn.close()
 
+        uyari_mesaji = islem.get("uyari")
+        if uyari_mesaji:
+            print(f"  [UYARI] {uyari_mesaji}")
+
         payload = json.dumps({
-            "type":     "NEW_TX",
-            "id":       row_id,
-            "tip":      islem["islem_tipi"],
-            "kategori": islem.get("urun_kategorisi", "ALTIN"),
-            "birim":    islem.get("islem_birimi", "GRAM"),
-            "miktar":   islem["miktar"],
-            "ayar":     islem["urun_cinsi"],
-            "has":      islem["net_has"], 
+            "type":       "NEW_TX",
+            "id":         row_id,
+            "tip":        islem["islem_tipi"],
+            "kategori":   islem.get("urun_kategorisi", "ALTIN"),
+            "birim":      islem.get("islem_birimi", "GRAM"),
+            "miktar":     islem["miktar"],
+            "adet":       islem.get("adet", 1),
+            "ayar":       islem["urun_cinsi"],
+            "has":        islem["net_has"],
+            "odeme_tipi": islem.get("odeme_tipi", "NAKIT"),
+            "uyari":      uyari_mesaji,
         }, ensure_ascii=False)
-        
+
         broadcast_from_thread(payload)
-        
         return True
 
     except Exception as e:
@@ -805,13 +905,23 @@ def _get_market_data_cached():
         return _market_with_trends(_market_cache_data, _market_cache_prev_data)
 
 
-def _query_islemler(conn, gunler=None, start_date=None, end_date=None, tip=None, personel_id=None, limit=None):
+def _query_islemler(conn, gunler=None, start_date=None, end_date=None, tip=None, personel_id=None, limit=None, odeme_tipi=None):
     cursor = conn.cursor()
     query = """
-        SELECT i.id, i.islem_tarihi, i.islem_tipi, i.urun_cinsi,
-               i.brut_miktar, i.net_has_miktar, i.birim_fiyat,
-               COALESCE(p.ad_soyad, 'Bilinmiyor') AS personel_ad_soyad,
-               i.personel_id
+        SELECT
+            i.id,
+            i.islem_tarihi,
+            i.islem_tipi,
+            i.urun_cinsi,
+            i.brut_miktar,
+            i.net_has_miktar,
+            i.birim_fiyat,
+            COALESCE(p.ad_soyad, 'Bilinmiyor') AS personel_ad_soyad,
+            i.personel_id,
+            COALESCE(i.urun_kategorisi, 'ALTIN')  AS urun_kategorisi,
+            COALESCE(i.islem_birimi,   'GRAM')    AS islem_birimi,
+            COALESCE(i.odeme_tipi,     'NAKIT')   AS odeme_tipi,
+            COALESCE(i.adet, 1)                   AS adet
         FROM islemler i
         LEFT JOIN personeller p ON p.id = i.personel_id
         WHERE 1=1
@@ -835,13 +945,17 @@ def _query_islemler(conn, gunler=None, start_date=None, end_date=None, tip=None,
     if tip:
         query += " AND i.islem_tipi = %s"
         params.append(tip.upper())
-    
+
     if personel_id is not None:
         query += " AND i.personel_id = %s"
         params.append(personel_id)
 
+    if odeme_tipi:
+        query += " AND COALESCE(i.odeme_tipi, 'NAKIT') = %s"
+        params.append(odeme_tipi.upper())
+
     query += " ORDER BY i.islem_tarihi DESC"
-    
+
     if limit:
         query += " LIMIT %s"
         params.append(limit)
@@ -891,89 +1005,86 @@ async def manuel_islem_ekle(payload: IslemPayload):
         if islem_tipi not in ["ALIS", "SATIS"]:
             raise HTTPException(status_code=400, detail="Geçersiz işlem tipi.")
 
-        urun_cinsi = payload.urun_cinsi.strip().upper()
+        urun_cinsi      = payload.urun_cinsi.strip().upper()
         urun_kategorisi = payload.urun_kategorisi.strip().upper()
-        islem_birimi = payload.islem_birimi.strip().upper()
+        islem_birimi    = payload.islem_birimi.strip().upper()
+        odeme_tipi      = payload.odeme_tipi.strip().upper() if payload.odeme_tipi else "NAKIT"
+        if odeme_tipi not in ["NAKIT", "KART"]:
+            raise HTTPException(status_code=400, detail="Geçersiz ödeme tipi. 'NAKIT' veya 'KART' olmalıdır.")
+        adet = max(1, int(payload.adet))
         brut = float(payload.brut_miktar)
-        
+
         milyem = 0.0
         hesaplanan_has = 0.0
 
-        # 2. Kategoriye Göre Has Hesaplama Mantığı
+        # 2. Kategoriye Göre Has Hesaplama — tek merkezi mantık
         if urun_kategorisi == "PIRLANTA":
-            # Pırlantada has olmaz, direkt 0 yazılır. Tutar (birim_fiyat) önemlidir.
             milyem = 0.0
             hesaplanan_has = 0.0
-            
+
         elif urun_kategorisi == "SARRAFIYE":
-            # Sarrafiye için has karşılıkları (Adet * Sabit Has)
-            sarrafiye_has_map = {
-                "CEYREK_ALTIN": 1.605,
-                "YARIM_ALTIN": 3.210,
-                "TAM_ALTIN": 6.420,
-                "ATA_ALTIN": 6.600,
-            }
-            has_karsiligi = sarrafiye_has_map.get(urun_cinsi)
-            
+            # Merkezi SARRAFIYE_CINSI_MAP kullan (tek kaynak)
+            has_karsiligi = SARRAFIYE_CINSI_MAP.get(urun_cinsi)
             if has_karsiligi is None:
-                raise HTTPException(status_code=400, detail="Geçersiz sarrafiye cinsi.")
-            
-            hesaplanan_has = round(brut * has_karsiligi, 3)
-            
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Geçersiz sarrafiye cinsi: {urun_cinsi}. "
+                           f"Geçerli değerler: {list(SARRAFIYE_CINSI_MAP.keys())}"
+                )
+            hesaplanan_has = round(brut * has_karsiligi, 4)
+
         else:
-            # Standart ALTIN / HURDA mantığı (Gram * Milyem)
+            # Standart ALTIN / HURDA (Gram × Milyem)
             milyem = MILYEM_MAP.get(urun_cinsi)
             if milyem is None:
-                raise HTTPException(status_code=400, detail="Geçersiz altın ayarı.")
-                
-            hesaplanan_has = brut * milyem
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Geçersiz altın ayarı: {urun_cinsi}. "
+                           f"Geçerli değerler: {list(MILYEM_MAP.keys())}"
+                )
+            hesaplanan_has = round(brut * milyem, 4)
 
-        # 3. Veritabanına Yazma İşlemi
+        # 3. Veritabanına Yazma
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
-
         cursor.execute(
             """
-            INSERT INTO islemler 
-            (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO islemler
+            (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi,
+             brut_miktar, milyem, birim_fiyat, net_has_miktar, odeme_tipi, adet)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
-                payload.personel_id,
-                islem_tipi,
-                urun_kategorisi,
-                islem_birimi,
-                urun_cinsi,
-                brut,
-                milyem,
-                payload.birim_fiyat,
-                hesaplanan_has
+                payload.personel_id, islem_tipi, urun_kategorisi, islem_birimi,
+                urun_cinsi, brut, milyem, payload.birim_fiyat, hesaplanan_has,
+                odeme_tipi, adet,
             ),
         )
-        
         row_id = cursor.fetchone()[0]
         conn.commit()
         cursor.close()
 
-        # 4. WebSocket ile Tüm Ekranlara (Dashboard) Anlık Bildirim
+        # 4. WebSocket ile Anlık Bildirim
         ws_payload = json.dumps({
-            "type":     "NEW_TX",
-            "id":       row_id,
-            "tip":      islem_tipi,
-            "kategori": urun_kategorisi,
-            "birim":    islem_birimi,
-            "miktar":   brut,
-            "ayar":     urun_cinsi,
-            "has":      hesaplanan_has,
+            "type":       "NEW_TX",
+            "id":         row_id,
+            "tip":        islem_tipi,
+            "kategori":   urun_kategorisi,
+            "birim":      islem_birimi,
+            "miktar":     brut,
+            "adet":       adet,
+            "ayar":       urun_cinsi,
+            "has":        hesaplanan_has,
+            "odeme_tipi": odeme_tipi,
         }, ensure_ascii=False)
-        
         await manager.broadcast_text(ws_payload)
 
         return {
-            "id": row_id,
-            "mesaj": "Manuel işlem başarıyla kaydedildi.",
-            "net_has_miktar": hesaplanan_has
+            "id":             row_id,
+            "mesaj":          "Manuel işlem başarıyla kaydedildi.",
+            "net_has_miktar": hesaplanan_has,
+            "odeme_tipi":     odeme_tipi,
         }
 
     except HTTPException:
@@ -1110,23 +1221,28 @@ def islemleri_getir(
     end_date: str | None = Query(None),
     tip: str | None = Query(None),
     personel_id: int | None = Query(None),
-    limit: int | None = Query(None)
+    limit: int | None = Query(None),
+    odeme_tipi: str | None = Query(None),
 ):
     conn = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        rows = _query_islemler(conn, gunler, start_date, end_date, tip, personel_id, limit)
+        rows = _query_islemler(conn, gunler, start_date, end_date, tip, personel_id, limit, odeme_tipi)
         return [
             {
-                "id": r[0],
-                "islem_tarihi": r[1].isoformat() if r[1] else None,
-                "islem_tipi": r[2],
-                "urun_cinsi": r[3],
-                "brut_miktar": float(r[4]) if r[4] is not None else 0.0,
-                "net_has_miktar": float(r[5]) if r[5] is not None else 0.0,
-                "birim_fiyat": float(r[6]) if r[6] is not None else 0.0,
+                "id":              r[0],
+                "islem_tarihi":    r[1].isoformat() if r[1] else None,
+                "islem_tipi":      r[2],
+                "urun_cinsi":      r[3],
+                "brut_miktar":     float(r[4]) if r[4] is not None else 0.0,
+                "net_has_miktar":  float(r[5]) if r[5] is not None else 0.0,
+                "birim_fiyat":     float(r[6]) if r[6] is not None else 0.0,
                 "personel_ad_soyad": r[7],
-                "personel_id": r[8],
+                "personel_id":     r[8],
+                "urun_kategorisi": r[9],
+                "islem_birimi":    r[10],
+                "odeme_tipi":      r[11],
+                "adet":            int(r[12]) if r[12] is not None else 1,
             }
             for r in rows
         ]
@@ -1148,51 +1264,72 @@ def aktif_personeller():
 
 @app.put("/islemler/{islem_id}")
 async def islem_duzenle(islem_id: int, payload: IslemPayload):
+    """İşlemi günceller. Sarrafiye/Pırlanta has hesabını da doğru yapar."""
     conn = None
     try:
-        # Validasyon ve Has Hesaplama
-        islem_tipi = payload.islem_tipi.strip().upper()
-        urun_cinsi = payload.urun_cinsi.strip().upper()
-        milyem = MILYEM_MAP.get(urun_cinsi)
-        brut = float(payload.brut_miktar)
-        hesaplanan_has = brut * milyem
+        islem_tipi      = payload.islem_tipi.strip().upper()
+        urun_cinsi      = payload.urun_cinsi.strip().upper()
+        urun_kategorisi = payload.urun_kategorisi.strip().upper()
+        odeme_tipi      = (payload.odeme_tipi or "NAKIT").strip().upper()
+        brut            = float(payload.brut_miktar)
+        adet            = max(1, int(payload.adet))
+
+        milyem = 0.0
+        hesaplanan_has = 0.0
+
+        # Manuel endpoint ile aynı has hesaplama mantığı
+        if urun_kategorisi == "PIRLANTA":
+            hesaplanan_has = 0.0
+        elif urun_kategorisi == "SARRAFIYE":
+            has_karsiligi = SARRAFIYE_CINSI_MAP.get(urun_cinsi)
+            if has_karsiligi is None:
+                raise HTTPException(status_code=400, detail=f"Geçersiz sarrafiye cinsi: {urun_cinsi}")
+            hesaplanan_has = round(brut * has_karsiligi, 4)
+        else:
+            milyem = MILYEM_MAP.get(urun_cinsi)
+            if milyem is None:
+                raise HTTPException(status_code=400, detail=f"Geçersiz altın ayarı: {urun_cinsi}")
+            hesaplanan_has = round(brut * milyem, 4)
 
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
 
-        # UI'da kasayı doğru hesaplamak için eski verileri öğreniyoruz
         cursor.execute("SELECT islem_tipi, net_has_miktar FROM islemler WHERE id = %s", (islem_id,))
         old_row = cursor.fetchone()
         if not old_row:
             raise HTTPException(status_code=404, detail="İşlem bulunamadı.")
         old_tip, old_has = old_row
 
-        # Güncelleme
         cursor.execute(
             """
             UPDATE islemler
-            SET islem_tipi=%s, urun_cinsi=%s, brut_miktar=%s, milyem=%s, birim_fiyat=%s, net_has_miktar=%s
+            SET islem_tipi=%s, urun_kategorisi=%s, urun_cinsi=%s, brut_miktar=%s,
+                milyem=%s, birim_fiyat=%s, net_has_miktar=%s, odeme_tipi=%s, adet=%s
             WHERE id=%s
             """,
-            (islem_tipi, urun_cinsi, brut, milyem, payload.birim_fiyat, hesaplanan_has, islem_id)
+            (islem_tipi, urun_kategorisi, urun_cinsi, brut,
+             milyem, payload.birim_fiyat, hesaplanan_has, odeme_tipi, adet, islem_id)
         )
         conn.commit()
         cursor.close()
 
-        # WebSocket üzerinden "Güncelleme Yapıldı" anonsu (Böylece Dashboard f5 atmadan yenilenir)
         ws_payload = json.dumps({
-            "type": "UPDATE_TX",
-            "id": islem_id,
-            "tip": islem_tipi,
-            "miktar": brut,
-            "ayar": urun_cinsi,
-            "has": hesaplanan_has,
-            "eski_tip": old_tip,
-            "eski_has": float(old_has)
+            "type":       "UPDATE_TX",
+            "id":         islem_id,
+            "tip":        islem_tipi,
+            "miktar":     brut,
+            "adet":       adet,
+            "ayar":       urun_cinsi,
+            "has":        hesaplanan_has,
+            "odeme_tipi": odeme_tipi,
+            "eski_tip":   old_tip,
+            "eski_has":   float(old_has),
         }, ensure_ascii=False)
         await manager.broadcast_text(ws_payload)
 
-        return {"mesaj": "İşlem başarıyla güncellendi"}
+        return {"mesaj": "İşlem başarıyla güncellendi", "net_has_miktar": hesaplanan_has}
+    except HTTPException:
+        raise
     except Exception as e:
         if conn: conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1257,6 +1394,22 @@ class CorporatePDF(FPDF):
         self.cell(0, 5, f"Sayfa {self.page_no()}", align="R")
 
 
+class CorporatePDF(FPDF):
+    def header(self):
+        # Altın sarısı üst çizgi vurgusu
+        self.set_fill_color(212, 175, 55) # #D4AF37
+        self.rect(0, 0, 210, 4, style="F")
+        self.set_y(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Corporate", "", 8)
+        self.set_text_color(150, 150, 150)
+        self.set_draw_color(230, 230, 230)
+        self.line(10, self.get_y(), 200, self.get_y())
+        self.cell(0, 5, "Bu rapor Çapar ERP sistemi tarafından otomatik oluşturulmuştur.", align="L")
+        self.cell(0, 5, f"Sayfa {self.page_no()}", align="R")
+
 @app.get("/rapor/pdf")
 def generate_pdf_report(
     gunler: int | None = Query(None),
@@ -1269,7 +1422,6 @@ def generate_pdf_report(
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         
-        # 1. İşlemleri artık yeni dinamik filtreleme motorumuzla çekiyoruz
         rows = _query_islemler(
             conn, 
             gunler=gunler, 
@@ -1277,74 +1429,172 @@ def generate_pdf_report(
             end_date=end_date, 
             tip=tip, 
             personel_id=personel_id, 
-            limit=500
+            limit=1000
         )
         
         toplam_alis  = sum(float(r[5] or 0) for r in rows if r[2] == "ALIS")
         toplam_satis = sum(float(r[5] or 0) for r in rows if r[2] == "SATIS")
         net_has = toplam_alis - toplam_satis
 
+        kart_alis_tl   = sum(float(r[6] or 0) for r in rows if r[2] == "ALIS" and r[11] == "KART")
+        kart_satis_tl  = sum(float(r[6] or 0) for r in rows if r[2] == "SATIS" and r[11] == "KART")
+        nakit_alis_tl  = sum(float(r[6] or 0) for r in rows if r[2] == "ALIS" and r[11] == "NAKIT")
+        nakit_satis_tl = sum(float(r[6] or 0) for r in rows if r[2] == "SATIS" and r[11] == "NAKIT")
+
         pdf = CorporatePDF()
         pdf.set_auto_page_break(auto=True, margin=20)
         pdf.add_page()
 
         font_candidates = [
-            r"C:\Windows\Fonts\DejaVuSans.ttf",
             r"C:\Windows\Fonts\arial.ttf",
             r"C:\Windows\Fonts\Arial.ttf",
+            r"C:\Windows\Fonts\calibri.ttf",
         ]
         font_path = next((p for p in font_candidates if os.path.exists(p)), None)
         if not font_path:
             raise RuntimeError("Unicode font bulunamadı.")
-        pdf.add_font("Corporate", "", font_path)
-        pdf.set_font("Corporate", "", 11)
+        pdf.add_font("Corporate", "", font_path, uni=True)
+        pdf.add_font("Corporate-Bold", "", font_path, uni=True) # Arial'ı bold gibi kullanacağız veya direkt fontu var sayacağız
 
-        pdf.set_text_color(25, 25, 25)
-        pdf.set_font("Corporate", "", 15)
-        pdf.cell(0, 10, "ÇAPAR KUYUMCULUK - KURUMSAL İŞLEM RAPORU", ln=1, align="C")
+        # --- BAŞLIK KISMI ---
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_font("Corporate", "", 16)
+        pdf.cell(0, 8, "ÇAPAR KUYUMCULUK", ln=1, align="L")
+        
+        pdf.set_font("Corporate", "", 10)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 5, "KURUMSAL ISLEM RAPORU", ln=1, align="L")
+        
+        # Tarih / Kapsam Bilgisi (Sağ Üstte Hizalama)
+        if start_date and end_date and start_date != end_date:
+            rapor_kapsami = f"{start_date} - {end_date}"
+        elif start_date:
+            rapor_kapsami = f"{start_date} (Tek Gün)"
+        elif gunler:
+            rapor_kapsami = f"Son {gunler} Gün"
+        else:
+            rapor_kapsami = "Tüm Islemler"
+
+        # Y'yi tekrar yukarı alıp sağa yazdırıyoruz
+        current_y = pdf.get_y()
+        pdf.set_xy(10, 10)
+        pdf.set_font("Corporate", "", 9)
+        pdf.cell(0, 8, f"Kapsam: {rapor_kapsami}", ln=1, align="R")
+        pdf.cell(0, 5, f"Çıktı Tarihi: {time.strftime('%d.%m.%Y %H:%M')}", ln=1, align="R")
+        pdf.set_y(current_y + 8)
+
+        # --- ÖZET KARTLARI (KPI) ---
+        pdf.set_fill_color(248, 250, 252) # Hafif gri arka plan
+        pdf.set_draw_color(226, 232, 240) # İnce gri çerçeve
+        pdf.set_text_color(50, 50, 50)
         pdf.set_font("Corporate", "", 10)
         
-        # 2. PDF Başlığına Tarih Bilgisini Dinamik Yazdıralım
-        if start_date and end_date and start_date != end_date:
-            rapor_kapsami = f"Kapsam: {start_date} / {end_date}"
-        elif start_date:
-            rapor_kapsami = f"Kapsam: {start_date} (Tek Gün)"
-        elif gunler:
-            rapor_kapsami = f"Kapsam: Son {gunler} Gün"
-        else:
-            rapor_kapsami = "Kapsam: Tüm İşlemler"
-            
-        pdf.cell(0, 6, rapor_kapsami, ln=1, align="R")
-        pdf.cell(0, 6, f"Çıktı Tarihi: {time.strftime('%d.%m.%Y %H:%M')}", ln=1, align="R")
-        pdf.ln(2)
+        # 3 Kutucuk Yanyana
+        pdf.cell(60, 12, f"Toplam Alış (Has): {toplam_alis:.3f} gr", border=1, fill=True, align="C")
+        pdf.cell(5, 12, "", border=0) # Boşluk
+        pdf.cell(60, 12, f"Toplam Satış (Has): {toplam_satis:.3f} gr", border=1, fill=True, align="C")
+        pdf.cell(5, 12, "", border=0) # Boşluk
+        
+        # Net Has Kutusu (Altın Sarısı Çerçeveli)
+        pdf.set_draw_color(212, 175, 55)
+        pdf.set_fill_color(253, 250, 237)
+        pdf.set_text_color(180, 130, 20)
+        pdf.cell(60, 12, f"Net Has Bakiye: {net_has:.3f} gr", border=1, fill=True, ln=1, align="C")
+        pdf.ln(10)
 
-        pdf.set_fill_color(245, 245, 245)
-        pdf.set_draw_color(220, 220, 220)
-        pdf.rect(10, pdf.get_y(), 190, 20, style="DF")
-        y0 = pdf.get_y() + 4
-        pdf.set_xy(14, y0)
-        pdf.cell(58, 6, f"Toplam Alış (Has): {toplam_alis:.3f} gr", ln=0)
-        pdf.cell(58, 6, f"Toplam Satış (Has): {toplam_satis:.3f} gr", ln=0)
-        pdf.cell(58, 6, f"Net Has Bakiye: {net_has:.3f} gr", ln=1)
-        pdf.ln(14)
-
-        headers = ["Tarih", "Personel", "Tip", "Ayar", "Brut (gr)", "Has (gr)", "Birim Fiyat"]
-        widths  = [32, 38, 18, 22, 24, 24, 30]
-        pdf.set_fill_color(230, 230, 230)
         pdf.set_font("Corporate", "", 9)
+
+        # Nakit Kutusu (Yeşil Tonları)
+        pdf.set_fill_color(236, 253, 245)
+        pdf.set_draw_color(167, 243, 208)
+        pdf.set_text_color(6, 95, 70)
+        nakit_metin = f"Nakit Alış: {nakit_alis_tl:,.0f} TL  |  Nakit Satış: {nakit_satis_tl:,.0f} TL".replace(",", ".")
+        pdf.cell(92, 10, nakit_metin, border=1, fill=True, align="C")
+
+        pdf.cell(6, 10, "", border=0) # İki kutu arası yatay boşluk
+
+        # Kart Kutusu (Mavi Tonları)
+        pdf.set_fill_color(239, 246, 255)
+        pdf.set_draw_color(191, 219, 254)
+        pdf.set_text_color(30, 64, 175)
+        kart_metin = f"Kartlı Alış: {kart_alis_tl:,.0f} TL  |  Kartlı Satış: {kart_satis_tl:,.0f} TL".replace(",", ".")
+        pdf.cell(92, 10, kart_metin, border=1, fill=True, align="C", ln=1)
+
+        pdf.ln(8) # Tablo öncesi boşluk
+
+        # --- TABLO BAŞLIKLARI ---
+        headers = ["Tarih", "Personel", "İşlem", "Ürün", "Miktar", "Has (gr)", "Tutar", "Ödeme Türü"]
+        # Toplam genişlik = 190mm
+        widths  = [26, 30, 16, 22, 22, 20, 32, 22] 
+        
+        pdf.set_fill_color(241, 245, 249) # Tablo başlık arkaplanı
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_text_color(71, 85, 105)
+        pdf.set_font("Corporate", "", 9)
+        
         for i, h in enumerate(headers):
-            pdf.cell(widths[i], 8, h, border=1, align="C", fill=True)
+            pdf.cell(widths[i], 9, h, border="B", align="L" if i < 4 else "R", fill=True)
         pdf.ln()
 
+        # --- TABLO İÇERİĞİ ---
         pdf.set_font("Corporate", "", 8)
+        
+        URUN_LABEL = { 
+            '24_AYAR': '24 Ayar', '22_AYAR': '22 Ayar', '18_AYAR': '18 Ayar', '14_AYAR': '14 Ayar',
+            'CEYREK_ALTIN': 'Çeyrek', 'YARIM_ALTIN': 'Yarim', 'TAM_ALTIN': 'Tam', 'ATA_ALTIN': 'Ata',
+            'PIRLANTA': 'Pirlanta'
+        }
+
         fill = False
+        pdf.set_draw_color(241, 245, 249) # Çok ince satir alt çizgisi
+        
         for row in rows:
+            # row: [id, tarih, tip, cinsi, brut, net_has, fiyat, personel_ad, p_id, kategori, birim, odeme, adet]
             t_str = row[1].strftime("%d.%m.%Y %H:%M") if row[1] else "-"
-            vals = [t_str, str(row[7]), str(row[2]), str(row[3]),
-                    f"{float(row[4] or 0):.3f}", f"{float(row[5] or 0):.3f}", f"{float(row[6] or 0):.2f}"]
-            pdf.set_fill_color(248, 248, 248) if fill else pdf.set_fill_color(255, 255, 255)
+            personel = str(row[7])
+            tip = "Satış" if row[2] == "SATIS" else "Alış"
+            urun = URUN_LABEL.get(row[3], str(row[3]))
+            kategori = row[9]
+            birim = row[10]
+            odeme = "Kart" if row[11] == "KART" else "Nakit"
+            
+            # Dinamik Miktar Formatı (Adet vs Gram)
+            miktar_val = float(row[4] or 0)
+            if birim == "ADET":
+                miktar_str = f"{int(miktar_val)} Adet"
+            else:
+                miktar_str = f"{miktar_val:.2f} gr"
+                
+            # Dinamik Has Formatı (Pırlanta ise tire çek)
+            if kategori == "PIRLANTA":
+                has_str = "-"
+            else:
+                has_str = f"{float(row[5] or 0):.3f}"
+                
+            # Tutar Formatı (Binlik ayraçlı)
+            fiyat_val = float(row[6] or 0)
+            if fiyat_val > 0:
+                fiyat_str = f"{fiyat_val:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
+            else:
+                fiyat_str = "-"
+
+            vals = [t_str, personel, tip, urun, miktar_str, has_str, fiyat_str, odeme]
+            
+            # Alış ve Satışa göre renk kodlaması (Sadece "İşlem" hücresinde metin rengi)
+            pdf.set_fill_color(248, 250, 252) if fill else pdf.set_fill_color(255, 255, 255)
+            
             for i, val in enumerate(vals):
-                pdf.cell(widths[i], 7, val, border=1, align="R" if i >= 4 else "L", fill=fill)
+                if i == 2: # İşlem Sütunu Renklendirme
+                    if tip == "Alış":
+                        pdf.set_text_color(16, 185, 129) # Zümrüt Yeşili
+                    else:
+                        pdf.set_text_color(239, 68, 68) # Kırmızı
+                else:
+                    pdf.set_text_color(51, 65, 85) # Standart Koyu Gri
+
+                align = "L" if i < 4 else "R"
+                pdf.cell(widths[i], 8, val, border="B", align=align, fill=fill)
+            
             pdf.ln()
             fill = not fill
 

@@ -68,31 +68,51 @@ class _VoiceControlPageState extends State<VoiceControlPage>
   late Animation<double> _rippleAnimation;
   late Animation<double> _fadeAnimation;
 
-  // Ses seviyesi simülasyonu (gerçek uygulamada VoiceService'den gelmeli)
+  // Ses seviyesi simülasyonu
   double _voiceLevel = 0.0;
   Timer? _voiceLevelTimer;
-  double _amplitude = 0.0;
-  @override
+  double _amplitude  = 0.0;
+
+  // İşlem önizleme (sesli komut algılandığında)
+  IslemPreview? _commandPreview;
+
+  // Yeniden bağlanma bilgisi
+  String? _reconnectInfo;
+@override
 void initState() {
   super.initState();
   _initAnimations();
   AppConfig.loadConfig().then((_) => _personelleriGetir());
   WidgetsBinding.instance.addObserver(this);
-  
-  // TEK VE DOĞRU TANIMLAMA BURASI
+
   _voiceService = VoiceService(
     onStatusChanged: (msg) {
       if (mounted) setState(() => _statusMessage = msg);
     },
     onDisconnected: () {
       if (mounted) {
-        setState(() { _isActive = false; _isHoldPressed = false; });
+        setState(() {
+          _isActive = false;
+          _isHoldPressed = false;
+          _commandPreview = null;
+          _reconnectInfo = null;
+        });
         _stopAnimations();
-        _showSnack("Sunucu bağlantısı kesildi.");
+        _showSnack('Sunucu bağlantısı kesildi.');
       }
     },
     onAmplitudeChanged: (amp) {
       if (mounted) setState(() => _amplitude = amp);
+    },
+    onCommandPreview: (preview) {
+      if (mounted) setState(() => _commandPreview = preview);
+    },
+    onReconnectAttempt: (attempt, nextRetry) {
+      if (mounted) {
+        setState(() {
+          _reconnectInfo = 'Yeniden bağlanıyor... (#$attempt, ${nextRetry.inSeconds}sn)';
+        });
+      }
     },
   );
 }
@@ -142,7 +162,13 @@ void initState() {
     _rippleController.stop();
     _rippleController.reset();
     _voiceLevelTimer?.cancel();
-    setState(() => _voiceLevel = 0.0);
+    if (mounted) {
+      setState(() {
+        _voiceLevel = 0.0;
+        _commandPreview = null;
+        _reconnectInfo  = null;
+      });
+    }
   }
 
   @override
@@ -389,21 +415,179 @@ void initState() {
   );
 }
 
+  // ── Premium Çok Katmanlı Ses Halkası ────────────────────────────────────────
   Widget _buildWaveEffect() {
-  double scale = 1.0 + (_amplitude * 1.2); // Sese göre 2.2 kata kadar büyür
-  return AnimatedContainer(
-    duration: const Duration(milliseconds: 50),
-    width: 180 * scale,
-    height: 180 * scale,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      border: Border.all(
-        color: const Color(0xFFD4AF37).withOpacity((1 - _amplitude).clamp(0.1, 0.4)),
-        width: 1.5 + (_amplitude * 5),
+    return CustomPaint(
+      size: const Size(280, 280),
+      painter: _WaveRingsPainter(
+        amplitude: _amplitude,
+        animation: _rippleAnimation,
       ),
-    ),
-  );
-}
+    );
+  }
+
+  // ── İşlem Önizleme Kartı ─────────────────────────────────────────────────────
+  Widget _buildCommandPreview() {
+    final p = _commandPreview!;
+    final renkAlis  = const Color(0xFF34D399); // Yeşil — alış
+    final renkSatis = const Color(0xFFF87171); // Kırmızı — satış
+    final renkKart  = const Color(0xFF60A5FA); // Mavi — kart
+    final renk      = p.islemTipi == 'ALIS' ? renkAlis : renkSatis;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        color: Colors.white.withOpacity(0.06),
+        border: Border.all(color: renk.withOpacity(0.4), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: renk.withOpacity(0.12),
+            blurRadius: 20,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  color: renk.withOpacity(0.18),
+                  border: Border.all(color: renk.withOpacity(0.5)),
+                ),
+                child: Text(
+                  p.islemTipi == 'ALIS' ? '↑ ALIŞ' : '↓ SATIŞ',
+                  style: TextStyle(
+                    color: renk,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (p.odemeTipi == 'KART')
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    color: renkKart.withOpacity(0.15),
+                    border: Border.all(color: renkKart.withOpacity(0.4)),
+                  ),
+                  child: Text(
+                    '💳 KART',
+                    style: TextStyle(
+                      color: renkKart,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    color: const Color(0xFF34D399).withOpacity(0.12),
+                    border: Border.all(color: const Color(0xFF34D399).withOpacity(0.35)),
+                  ),
+                  child: const Text(
+                    '💵 NAKİT',
+                    style: TextStyle(
+                      color: Color(0xFF34D399),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+              const Spacer(),
+              // Yanıp sönen onay göstergesi
+              Container(
+                width: 7, height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: renk,
+                  boxShadow: [
+                    BoxShadow(color: renk.withOpacity(0.7), blurRadius: 8)
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            p.ozet,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+              height: 1.3,
+            ),
+          ),
+          if (p.netHas > 0) ...
+            [
+              const SizedBox(height: 6),
+              Text(
+                '≈ ${p.netHas.toStringAsFixed(4)} gr has altın',
+                style: TextStyle(
+                  color: const Color(0xFFD4AF37).withOpacity(0.7),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          if (p.uyari != null) ...
+            [
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  color: const Color(0xFFFBBF24).withOpacity(0.15),
+                  border: Border.all(color: const Color(0xFFFBBF24).withOpacity(0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Text('⚠️', style: TextStyle(fontSize: 13)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        p.uyari!,
+                        style: const TextStyle(
+                          color: Color(0xFFFBBF24),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          const SizedBox(height: 10),
+          Text(
+            'Onaylamak için "EVET", iptal için "HAYIR" deyin',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.35),
+              fontSize: 10,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   // ─── BUILD ─────────────────────────────────────────────────────────────────
   @override
@@ -813,10 +997,25 @@ void initState() {
           _buildToggleButon()
         else
           _buildHoldButon(),
-        const SizedBox(height: 32),
+        const SizedBox(height: 24),
         _buildDurumMetni(),
-        const SizedBox(height: 20),
-        if (_isActive) _buildSesGostergesi(),
+        const SizedBox(height: 16),
+        // İşlem önizleme alanı
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 350),
+          transitionBuilder: (child, anim) => FadeTransition(
+            opacity: anim,
+            child: SizeTransition(sizeFactor: anim, axisAlignment: -1, child: child),
+          ),
+          child: _commandPreview != null
+              ? Padding(
+                  key: ValueKey(_commandPreview!.ozet),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _buildCommandPreview(),
+                )
+              : const SizedBox.shrink(key: ValueKey('empty')),
+        ),
+        if (_isActive && _commandPreview == null) _buildSesGostergesi(),
       ],
     );
   }
@@ -1013,18 +1212,60 @@ void initState() {
   }
 
   Widget _buildAltBilgi() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return Column(
       children: [
-        Icon(Icons.lock_outline, color: Colors.white.withOpacity(0.15), size: 11),
-        const SizedBox(width: 6),
-        Text(
-          "Şifreli bağlantı  •  ${AppConfig.apiBase.replaceAll("http://", "").split(":")[0]}",
-          style: TextStyle(
-            color: Colors.white.withOpacity(0.15),
-            fontSize: 10,
-            letterSpacing: 0.5,
+        // Reconnect bilgisi
+        if (_reconnectInfo != null)
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Container(
+              key: ValueKey(_reconnectInfo),
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: const Color(0xFFFBBF24).withOpacity(0.1),
+                border: Border.all(color: const Color(0xFFFBBF24).withOpacity(0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 12, height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: Color(0xFFFBBF24),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _reconnectInfo!,
+                    style: TextStyle(
+                      color: const Color(0xFFFBBF24).withOpacity(0.8),
+                      fontSize: 9,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
+        // IP bilgisi
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.lock_outline, color: Colors.white.withOpacity(0.15), size: 11),
+            const SizedBox(width: 6),
+            Text(
+              'Şifreli bağlantı  •  '
+              '${AppConfig.apiBase.replaceAll("http://", "").split(":")[0]}',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.15),
+                fontSize: 10,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1201,4 +1442,64 @@ class _BackgroundPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Premium Ses Halkaları Painter ───────────────────────────────────────────
+class _WaveRingsPainter extends CustomPainter {
+  final double _amplitude;
+  final Animation<double> _animation;
+
+  _WaveRingsPainter({
+    required double amplitude,
+    required Animation<double> animation,
+  })  : _amplitude = amplitude,
+        _animation = animation,
+        super(repaint: animation);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+
+    // Her halka için farklı faz ve renk
+    final rings = [
+      _RingConfig(baseRadius: 95,  phaseOffset: 0.0,  baseOpacity: 0.45, color: const Color(0xFFD4AF37)),
+      _RingConfig(baseRadius: 115, phaseOffset: 0.33, baseOpacity: 0.28, color: const Color(0xFFB8962E)),
+      _RingConfig(baseRadius: 135, phaseOffset: 0.66, baseOpacity: 0.15, color: const Color(0xFF8B6914)),
+    ];
+
+    for (final ring in rings) {
+      // Animasyon değeri + amplitude ile halka yarıçapını hesapla
+      final animVal  = ((_animation.value + ring.phaseOffset) % 1.0);
+      final ampBoost = _amplitude * 18.0;
+      final r        = ring.baseRadius + (animVal * 12.0) + ampBoost;
+
+      // Amplitude'a göre opaklık artar
+      final opacity = (ring.baseOpacity + (_amplitude * 0.3)).clamp(0.0, 0.7);
+
+      final paint = Paint()
+        ..color = ring.color.withOpacity(opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5 + (_amplitude * 2.5);
+
+      canvas.drawCircle(Offset(cx, cy), r, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_WaveRingsPainter old) =>
+      old._amplitude != _amplitude;
+}
+
+class _RingConfig {
+  final double baseRadius;
+  final double phaseOffset;
+  final double baseOpacity;
+  final Color  color;
+  const _RingConfig({
+    required this.baseRadius,
+    required this.phaseOffset,
+    required this.baseOpacity,
+    required this.color,
+  });
 }

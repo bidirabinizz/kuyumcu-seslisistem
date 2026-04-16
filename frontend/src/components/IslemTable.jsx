@@ -2,17 +2,27 @@ import { useState, useEffect } from 'react';
 import { Mic, RotateCcw, Trash2, Edit2, AlertTriangle, X, CheckCircle, Calculator, Wallet } from 'lucide-react';
 
 const AYAR_LABEL = {
-  '24_AYAR': '24 Ayar',
-  '22_AYAR': '22 Ayar',
-  '18_AYAR': '18 Ayar',
-  '14_AYAR': '14 Ayar',
+  '24_AYAR':     '24 Ayar',
+  '22_AYAR':     '22 Ayar',
+  '18_AYAR':     '18 Ayar',
+  '14_AYAR':     '14 Ayar',
+  'CEYREK_ALTIN': 'Çeyrek',
+  'YARIM_ALTIN':  'Yarım',
+  'TAM_ALTIN':    'Tam',
+  'ATA_ALTIN':    'Ata',
+  'PIRLANTA':     'Pırlanta',
 };
 
 const AYAR_COLOR = {
-  '24_AYAR': 'text-gold-600 bg-gold-100',
-  '22_AYAR': 'text-amber-700 bg-amber-100',
-  '18_AYAR': 'text-orange-700 bg-orange-100',
-  '14_AYAR': 'text-ink-600 bg-ink-100',
+  '24_AYAR':     'text-gold-600 bg-gold-100',
+  '22_AYAR':     'text-amber-700 bg-amber-100',
+  '18_AYAR':     'text-orange-700 bg-orange-100',
+  '14_AYAR':     'text-ink-600 bg-ink-100',
+  'CEYREK_ALTIN': 'text-yellow-700 bg-yellow-100',
+  'YARIM_ALTIN':  'text-yellow-700 bg-yellow-100',
+  'TAM_ALTIN':    'text-yellow-800 bg-yellow-100',
+  'ATA_ALTIN':    'text-yellow-900 bg-yellow-100',
+  'PIRLANTA':     'text-pink-700 bg-pink-100',
 };
 
 // onEdit prop'unu ekledik
@@ -21,10 +31,10 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
   const [deleteModal, setDeleteModal] = useState({ isOpen: false, islem: null });
   const [editModal, setEditModal] = useState({ isOpen: false, islem: null });
   
-  // Düzenleme Formu State'i
   const [formData, setFormData] = useState({
     islem_tipi: 'ALIS',
     urun_cinsi: '22_AYAR',
+    odeme_tipi: 'NAKIT',
     miktar: '',
     birim_fiyat: ''
   });
@@ -33,9 +43,10 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
   useEffect(() => {
     if (editModal.islem) {
       setFormData({
-        islem_tipi: editModal.islem.tip,
-        urun_cinsi: editModal.islem.ayar,
-        miktar: editModal.islem.miktar,
+        islem_tipi: editModal.islem.tip || 'ALIS',
+        urun_cinsi: editModal.islem.ayar || '22_AYAR',
+        odeme_tipi: editModal.islem.odeme_tipi || 'NAKIT',
+        miktar: editModal.islem.miktar || '',
         birim_fiyat: editModal.islem.birim_fiyat || 0
       });
     }
@@ -51,9 +62,27 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
   const handleEditSubmit = (e) => {
     e.preventDefault();
     if (onEdit && editModal.islem) {
+      const cinsi = formData.urun_cinsi;
+      let islemBirimi = 'GRAM';
+      let urunKategorisi = 'ALTIN';
+
+      // Kategori ve Birim tespitleri
+      if (cinsi === 'PIRLANTA') {
+        islemBirimi = 'ADET';
+        urunKategorisi = 'PIRLANTA';
+      } else if (cinsi.includes('_ALTIN')) {
+        islemBirimi = 'ADET';
+        urunKategorisi = 'SARRAFIYE';
+      }
+
       onEdit(editModal.islem.id, {
-        ...formData,
+        islem_tipi: formData.islem_tipi,
+        urun_cinsi: cinsi,
+        urun_kategorisi: urunKategorisi,
+        islem_birimi: islemBirimi,
+        odeme_tipi: formData.odeme_tipi,
         brut_miktar: parseFloat(formData.miktar),
+        adet: islemBirimi === 'ADET' ? parseInt(formData.miktar, 10) : 1,
         birim_fiyat: parseFloat(formData.birim_fiyat)
       });
     }
@@ -80,9 +109,10 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
             <thead>
               <tr className="border-b border-[#d4af37]/10 bg-slate-50/50">
                 <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">İşlem</th>
-                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Ayar</th>
-                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Brüt Miktar</th>
+                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Ayar / Tür</th>
+                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Miktar</th>
                 <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Has Altın</th>
+                <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Ödeme</th>
                 <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500">Saat</th>
                 <th className="px-6 py-4 text-[11px] font-bold uppercase tracking-wider text-slate-500 text-right">Yönet</th>
               </tr>
@@ -122,13 +152,30 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                         {AYAR_LABEL[islem.ayar] || islem.ayar}
                       </span>
                     </td>
+                    {/* Miktar — birime göre dinamik */}
                     <td className="px-6 py-4">
                       <span className="font-mono font-bold text-ink-800 text-sm">{islem.miktar}</span>
-                      <span className="text-xs text-ink-400 ml-1">gr</span>
+                      <span className="text-xs text-ink-400 ml-1">
+                        {islem.birim === 'ADET' ? 'Adet' : 'gr'}
+                      </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="font-mono font-black text-ink-900 text-sm">{Number(islem.has).toFixed(3)}</span>
-                      <span className="text-xs text-ink-400 ml-1">gr has</span>
+                      <span className="font-mono font-black text-ink-900 text-sm">
+                        {islem.has > 0 ? Number(islem.has).toFixed(3) : '—'}
+                      </span>
+                      {islem.has > 0 && <span className="text-xs text-ink-400 ml-1">gr has</span>}
+                    </td>
+                    {/* Ödeme tipi rozeti */}
+                    <td className="px-6 py-4">
+                      {islem.odeme_tipi === 'KART' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                          💳 Kart
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                          💵 Nakit
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <span className="text-xs font-mono text-ink-400">{islem.zaman || '—'}</span>
@@ -235,23 +282,36 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Ayar</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Ödeme Tipi</label>
                   <select
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500"
-                    value={formData.urun_cinsi}
-                    onChange={(e) => setFormData({...formData, urun_cinsi: e.target.value})}
+                    value={formData.odeme_tipi}
+                    onChange={(e) => setFormData({...formData, odeme_tipi: e.target.value})}
                   >
-                    <option value="24_AYAR">24 Ayar</option>
-                    <option value="22_AYAR">22 Ayar</option>
-                    <option value="18_AYAR">18 Ayar</option>
-                    <option value="14_AYAR">14 Ayar</option>
+                    <option value="NAKIT">Nakit</option>
+                    <option value="KART">Kart</option>
                   </select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Miktar (Gram)</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Ayar / Ürün Tipi</label>
+                  <select
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500"
+                    value={formData.urun_cinsi}
+                    onChange={(e) => setFormData({...formData, urun_cinsi: e.target.value})}
+                  >
+                    {/* Tüm ayarları, pırlantaları ve sarrafiyeleri buraya basıyoruz */}
+                    {Object.entries(AYAR_LABEL).map(([key, label]) => (
+                      <option key={key} value={key}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">
+                    Miktar {formData.urun_cinsi === 'PIRLANTA' || formData.urun_cinsi.includes('_ALTIN') ? '(Adet)' : '(Gram)'}
+                  </label>
                   <div className="relative">
                     <Calculator size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
@@ -262,8 +322,11 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                     />
                   </div>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Fiyat (TL)</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Birim Fiyat / Tutar (TL)</label>
                   <div className="relative">
                     <Wallet size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input

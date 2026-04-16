@@ -8,7 +8,7 @@ const URUN_LABEL = {
   'CEYREK_ALTIN': 'Çeyrek', 'YARIM_ALTIN': 'Yarım', 'TAM_ALTIN': 'Tam', 'ATA_ALTIN': 'Ata',
   'PIRLANTA': 'Pırlanta'
 };
-const API_BASE = 'http://localhost:8000';
+import { API_BASE } from '../apiConfig';
 
 // ─── Mini bar chart (saf SVG, kütüphane yok) ─────────────────────────────────
 const MiniBarChart = ({ data, renk }) => {
@@ -95,7 +95,8 @@ export const Raporlar = () => {
   const [endDate, setEndDate] = useState(todayStr);
   const [customDays, setCustomDays] = useState('30');
   
-  const [tip, setTip] = useState('');
+  const [tip, setTip]         = useState('');
+  const [odemeTipi, setOdemeTipi] = useState('');  // YENİ: Nakit/Kart filtresi
   const [personel, setPersonel] = useState('');
   const [islemler, setIslemler] = useState([]);
   const [personeller, setPersoneller] = useState([]);
@@ -113,8 +114,9 @@ export const Raporlar = () => {
     } else if (mode === 'days') {
       params.set('gunler', customDays || '30');
     }
-    if (tip) params.set('tip', tip);
-    if (personel) params.set('personel_id', personel);
+    if (tip)        params.set('tip', tip);
+    if (personel)   params.set('personel_id', personel);
+    if (odemeTipi) params.set('odeme_tipi', odemeTipi);
     return params;
   };
 
@@ -151,7 +153,7 @@ export const Raporlar = () => {
 
   useEffect(() => {
     islemGetir();
-  }, [mode, startDate, endDate, customDays, tip, personel]);
+  }, [mode, startDate, endDate, customDays, tip, odemeTipi, personel]);
 
   const exportPDF = () => {
     const params = getQueryParams();
@@ -173,6 +175,7 @@ export const Raporlar = () => {
         tip: r.islem_tipi,
         ayar: r.urun_cinsi,
         personel: r.personel_ad_soyad || 'Bilinmiyor',
+        odeme_tipi: r.odeme_tipi ?? 'NAKIT',
         miktar: Number(r.brut_miktar || 0), // Yeni backend'de brut_miktar içine asıl miktar kaydediliyor
         birim: r.islem_birimi || (isAdet ? 'ADET' : 'GRAM'),
         has: Number(r.net_has_miktar || 0),
@@ -263,13 +266,23 @@ export const Raporlar = () => {
           </select>
           <ChevronDown size={12} className="absolute right-3 text-ink-400 pointer-events-none" />
         </div>
+
+        {/* Ödeme tipi filtresi */}
+        <div className="relative flex items-center gap-2 bg-ink-50 px-4 py-2.5 rounded-xl border border-ink-100">
+          <select className="bg-transparent border-none text-sm font-semibold outline-none text-ink-700 appearance-none pr-4 cursor-pointer" value={odemeTipi} onChange={e => setOdemeTipi(e.target.value)}>
+            <option value="">Nakit & Kart</option>
+            <option value="NAKIT">💵 Sadece Nakit</option>
+            <option value="KART">💳 Sadece Kart</option>
+          </select>
+          <ChevronDown size={12} className="absolute right-3 text-ink-400 pointer-events-none" />
+        </div>
       </div>
 
       {hata && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">{hata}</div>}
       {loading && <div className="mb-4 rounded-xl border border-ink-200 bg-ink-50 px-4 py-2 text-sm font-semibold text-ink-600">Rapor verileri yükleniyor...</div>}
 
       {/* KPI kartları */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
         {[
           { label: 'Toplam Alış',   value: toplamAlis.toFixed(3),  unit: 'gr has', icon: TrendingUp,   bg: 'bg-emerald-50', border: 'border-emerald-100', ic: 'bg-emerald-100 text-emerald-700', vc: 'text-emerald-800' },
           { label: 'Toplam Satış',  value: toplamSatis.toFixed(3), unit: 'gr has', icon: TrendingDown, bg: 'bg-red-50',     border: 'border-red-100',     ic: 'bg-red-100 text-red-700',         vc: 'text-red-800'     },
@@ -328,7 +341,7 @@ export const Raporlar = () => {
           <table className="w-full text-left min-w-[700px]">
             <thead>
               <tr className="border-b border-ink-50 bg-ink-50/30">
-                {['Tarih', 'Saat', 'Personel', 'İşlem', 'Ürün', 'Miktar', 'Has Karşılığı', 'Tutar (TL)'].map(h => (
+                {['Tarih', 'Saat', 'Personel', 'İşlem', 'Lokal', 'Miktar', 'Has Karşılığı', 'Tutar (TL)', 'Ödeme'].map(h => (
                   <th key={h} className="px-5 py-3 text-[11px] font-bold uppercase tracking-wider text-ink-400">{h}</th>
                 ))}
               </tr>
@@ -364,11 +377,23 @@ export const Raporlar = () => {
                   <td className="px-5 py-3 font-mono font-bold text-sm text-ink-600">
                     {r.birim_fiyat > 0 ? `₺${r.birim_fiyat.toLocaleString('tr-TR')}` : '-'}
                   </td>
+                  {/* Ödeme tipi rozeti */}
+                  <td className="px-5 py-3">
+                    {r.odeme_tipi === 'KART' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                        💳 Kart
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                        💵 Nakit
+                      </span>
+                    )}
+                  </td>
                 </tr>
               ))}
               {filtrelenmis.length > 50 && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-4 text-center text-xs text-ink-400">
+                  <td colSpan={9} className="px-5 py-4 text-center text-xs text-ink-400">
                     İlk 50 kayıt gösteriliyor · PDF'te tümü mevcut
                   </td>
                 </tr>
