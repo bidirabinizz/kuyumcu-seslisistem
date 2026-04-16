@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, TrendingUp, TrendingDown, BarChart2, Calendar, Filter, ChevronDown } from 'lucide-react';
-
+import { Download, TrendingUp, TrendingDown, BarChart2, Calendar, Filter, ChevronDown, Search } from 'lucide-react';
 
 const AYARLAR = ['24_AYAR', '22_AYAR', '18_AYAR', '14_AYAR'];
 const AYAR_LABEL = { '24_AYAR': '24 Ayar', '22_AYAR': '22 Ayar', '18_AYAR': '18 Ayar', '14_AYAR': '14 Ayar' };
@@ -78,27 +77,56 @@ const DonutChart = ({ segments }) => {
 
 // ─── Raporlar sayfası ─────────────────────────────────────────────────────────
 export const Raporlar = () => {
-  const [aralik, setAralik]   = useState('30');
-  const [tip, setTip]         = useState('');
+  // 1. Yerel saat dilimine göre bugünün tarihini güvenli bir şekilde hesapla
+  const bugunObj = new Date();
+  const todayStr = new Date(bugunObj.getTime() - (bugunObj.getTimezoneOffset() * 60000))
+    .toISOString()
+    .split('T')[0];
+
+  // 2. Yeni Dinamik Filtreleme State'leri
+  const [mode, setMode] = useState('days'); // 'range', 'single', 'days'
+  const [startDate, setStartDate] = useState(todayStr);
+  const [endDate, setEndDate] = useState(todayStr);
+  const [customDays, setCustomDays] = useState('30');
+  
+  const [tip, setTip] = useState('');
   const [personel, setPersonel] = useState('');
   const [islemler, setIslemler] = useState([]);
   const [personeller, setPersoneller] = useState([]);
   const [loading, setLoading] = useState(true);
   const [hata, setHata] = useState('');
 
+  // 3. Backend'e gönderilecek parametreleri hazırlayan yardımcı fonksiyon
+  const getQueryParams = () => {
+    const params = new URLSearchParams();
+    
+    if (mode === 'range') {
+      params.set('start_date', startDate);
+      params.set('end_date', endDate);
+    } else if (mode === 'single') {
+      params.set('start_date', startDate);
+      // Tek gün sorgusunda backend BETWEEN kullanıyorsa end_date de aynı gün olmalı
+      params.set('end_date', startDate); 
+    } else if (mode === 'days') {
+      params.set('gunler', customDays || '30');
+    }
+
+    if (tip) params.set('tip', tip);
+    if (personel) params.set('personel_id', personel);
+    
+    return params;
+  };
+
   const islemGetir = async () => {
     try {
       setLoading(true);
       setHata('');
-      const params = new URLSearchParams({ gunler: aralik });
-      if (tip) params.set('tip', tip);
-      if (personel) params.set('personel_id', personel);
-
+      
+      const params = getQueryParams();
       const res = await fetch(`${API_BASE}/islemler?${params.toString()}`);
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.detail || 'İşlemler yüklenemedi.');
-      }
+      
+      if (!res.ok) throw new Error(data?.detail || 'İşlemler yüklenemedi.');
       setIslemler(data);
     } catch (err) {
       setHata(err.message || 'İşlemler yüklenemedi.');
@@ -112,10 +140,7 @@ export const Raporlar = () => {
     try {
       const res = await fetch(`${API_BASE}/personeller`);
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.detail || 'Personeller yüklenemedi.');
-      }
-      setPersoneller(data);
+      if (res.ok) setPersoneller(data);
     } catch (_) {
       setPersoneller([]);
     }
@@ -127,7 +152,12 @@ export const Raporlar = () => {
 
   useEffect(() => {
     islemGetir();
-  }, [aralik, tip, personel]);
+  }, [mode, startDate, endDate, customDays, tip, personel]);
+
+  const exportPDF = () => {
+    const params = getQueryParams();
+    window.open(`${API_BASE}/rapor/pdf?${params.toString()}`, '_blank');
+  };
 
   const filtrelenmis = useMemo(() => {
     return islemler.map((r) => {
@@ -147,13 +177,12 @@ export const Raporlar = () => {
     });
   }, [islemler]);
 
-  // KPI hesapları
+  // KPI ve Grafik hesaplamaları aynı kalacak...
   const toplamAlis  = filtrelenmis.filter(r => r.tip === 'ALIS').reduce((s, r) => s + r.has, 0);
   const toplamSatis = filtrelenmis.filter(r => r.tip === 'SATIS').reduce((s, r) => s + r.has, 0);
   const netHas      = toplamAlis - toplamSatis;
   const islemSayisi = filtrelenmis.length;
 
-  // Günlük grafik verisi
   const gunlukMap = {};
   filtrelenmis.forEach(r => {
     if (!gunlukMap[r.tarih]) gunlukMap[r.tarih] = { alis: 0, satis: 0 };
@@ -164,18 +193,10 @@ export const Raporlar = () => {
   const alisGrafik  = gunler.map(([label, v]) => ({ label, deger: v.alis  })).reverse();
   const satisGrafik = gunler.map(([label, v]) => ({ label, deger: v.satis })).reverse();
 
-  // Ayar dağılımı
   const ayarDagilim = AYARLAR.map(ayar => ({
     ayar,
     deger: filtrelenmis.filter(r => r.ayar === ayar).reduce((s, r) => s + r.has, 0),
   }));
-
-  const exportPDF = () => {
-    const params = new URLSearchParams({ gunler: aralik });
-    if (tip) params.set('tip', tip);
-    if (personel) params.set('personel_id', personel);
-    window.open(`http://localhost:8000/rapor/pdf?${params.toString()}`, '_blank');
-  };
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto">
@@ -183,7 +204,7 @@ export const Raporlar = () => {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
         <div>
           <h1 className="font-display text-2xl font-black text-ink-900 tracking-tight">Raporlar</h1>
-          <p className="text-sm text-ink-400 mt-0.5">Sesli işlem analizi ve dönemsel özet</p>
+          <p className="text-sm text-ink-400 mt-0.5">Dinamik sorgulama ve dönemsel özet</p>
         </div>
         <button
           onClick={exportPDF}
@@ -193,21 +214,58 @@ export const Raporlar = () => {
         </button>
       </div>
 
-      {/* Filtreler */}
-      <div className="bg-white border border-ink-100 rounded-2xl px-5 py-4 flex flex-wrap gap-3 items-center mb-6 shadow-sm">
-        <div className="flex items-center gap-2 bg-ink-50 px-4 py-2.5 rounded-xl border border-ink-100">
-          <Calendar size={13} className="text-ink-400" />
-          <select
-            className="bg-transparent border-none text-sm font-semibold outline-none text-ink-700 appearance-none cursor-pointer"
-            value={aralik}
-            onChange={e => setAralik(e.target.value)}
-          >
-            <option value="7">Son 7 Gün</option>
-            <option value="30">Son 30 Gün</option>
-            <option value="90">Son 90 Gün</option>
-          </select>
+      {/* 5. Gelişmiş Dinamik Filtreler */}
+      <div className="bg-white border border-ink-100 rounded-2xl px-5 py-4 flex flex-wrap gap-4 items-center mb-6 shadow-sm">
+        
+        {/* Mod Seçici Toggle */}
+        <div className="flex bg-ink-50 p-1 rounded-xl border border-ink-100">
+          <button 
+            onClick={() => setMode('range')} 
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === 'range' ? 'bg-white shadow-sm text-ink-900' : 'text-ink-400 hover:text-ink-600'}`}
+          >Tarih Aralığı</button>
+          <button 
+            onClick={() => setMode('single')} 
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === 'single' ? 'bg-white shadow-sm text-ink-900' : 'text-ink-400 hover:text-ink-600'}`}
+          >Tek Gün</button>
+          <button 
+            onClick={() => setMode('days')} 
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${mode === 'days' ? 'bg-white shadow-sm text-ink-900' : 'text-ink-400 hover:text-ink-600'}`}
+          >Son X Gün</button>
         </div>
 
+        {/* Dinamik Tarih/Sayı Girdileri */}
+        <div className="flex items-center gap-2">
+          {mode === 'range' && (
+            <>
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-ink-50 border border-ink-100 rounded-xl px-3 py-2 text-sm font-semibold text-ink-700 outline-none focus:ring-2 focus:ring-gold-400" />
+              <span className="text-ink-300 font-bold">-</span>
+              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-ink-50 border border-ink-100 rounded-xl px-3 py-2 text-sm font-semibold text-ink-700 outline-none focus:ring-2 focus:ring-gold-400" />
+            </>
+          )}
+          
+          {mode === 'single' && (
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-ink-50 border border-ink-100 rounded-xl px-3 py-2 text-sm font-semibold text-ink-700 outline-none focus:ring-2 focus:ring-gold-400" />
+          )}
+
+          {mode === 'days' && (
+             <div className="flex items-center gap-2 bg-ink-50 px-3 py-2 rounded-xl border border-ink-100 focus-within:ring-2 focus-within:ring-gold-400">
+                <Calendar size={14} className="text-ink-400" />
+                <input 
+                  type="number" 
+                  min="1"
+                  value={customDays} 
+                  onChange={e => setCustomDays(e.target.value)} 
+                  className="bg-transparent border-none text-sm font-semibold outline-none text-ink-700 w-16" 
+                  placeholder="Gün" 
+                />
+                <span className="text-xs font-bold text-ink-400">Gün</span>
+             </div>
+          )}
+        </div>
+
+        <div className="w-[1px] h-6 bg-ink-100 mx-1 hidden md:block"></div>
+
+        {/* Tip Filtresi */}
         <div className="relative flex items-center gap-2 bg-ink-50 px-4 py-2.5 rounded-xl border border-ink-100">
           <Filter size={13} className="text-ink-400" />
           <select
@@ -222,6 +280,7 @@ export const Raporlar = () => {
           <ChevronDown size={12} className="absolute right-3 text-ink-400 pointer-events-none" />
         </div>
 
+        {/* Personel Filtresi */}
         <div className="relative flex items-center gap-2 bg-ink-50 px-4 py-2.5 rounded-xl border border-ink-100">
           <select
             className="bg-transparent border-none text-sm font-semibold outline-none text-ink-700 appearance-none pr-4 cursor-pointer"
@@ -238,8 +297,8 @@ export const Raporlar = () => {
           <ChevronDown size={12} className="absolute right-3 text-ink-400 pointer-events-none" />
         </div>
       </div>
-      
 
+      {/* KPI Kartları, Hata Mesajları ve Tablo mevcut haliyle devam ediyor... */}
       {hata && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
           {hata}

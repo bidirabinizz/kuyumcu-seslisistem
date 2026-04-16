@@ -12,18 +12,29 @@ import axios from 'axios';
 
 export const Dashboard = () => {
   const { islemler, toplamHas, connected, loading, voiceState, lastTx, setLastTx } = useSocket(WS_BASE);
+
+  const bugunTarihObjesi = new Date();
+  const todayStr = new Date(bugunTarihObjesi.getTime() - (bugunTarihObjesi.getTimezoneOffset() * 60000))
+    .toISOString()
+    .split('T')[0];
+
   const [filters, setFilters] = useState({
     personel_id: '',
     tip: '',
-    tarih: ''
+    tarih: todayStr 
   });
   const [kurlar, setKurlar] = useState(null);
   const API_BASE = 'http://localhost:8000';
   
+// 3. İşlemlerden sadece BUGÜN yapılanları filtrele
+  const bugunkuIslemler = islemler.filter(i => {
+    if (!i.islem_tarihi) return false;
+    return i.islem_tarihi.split('T')[0] === todayStr;
+  });
 
-
-  const gunlukAlis  = islemler.filter(i => i.tip === 'ALIS').reduce((s, i) => s + i.has, 0);
-  const gunlukSatis = islemler.filter(i => i.tip === 'SATIS').reduce((s, i) => s + i.has, 0);
+  // 4. Günlük hacimleri tüm işlemlerden değil, "bugunkuIslemler" üzerinden hesapla
+  const gunlukAlis  = bugunkuIslemler.filter(i => i.tip === 'ALIS').reduce((s, i) => s + i.has, 0);
+  const gunlukSatis = bugunkuIslemler.filter(i => i.tip === 'SATIS').reduce((s, i) => s + i.has, 0);
   const piyasaFiyat = Number(kurlar?.gram_altin_24k_try || 0);
 
   const piyasaPL = islemler.reduce((acc, i) => {
@@ -37,27 +48,24 @@ export const Dashboard = () => {
   }, 0);
 
 
-const handleEdit = async (id, updatedData) => {
-  try {
-    // Backend'de PUT endpoint'i oluşturduktan sonra bu çalışacak.
-    await axios.put(`${API_BASE}/islemler/${id}`, {
-      ...updatedData,
-      personel_id: 1 // Veya işlemi düzenleyen yetkilinin ID'si (örn: context'ten alınabilir)
-    });
-  } catch (error) {
-    alert("İşlem güncellenirken hata oluştu.");
-  }
-};
+  const handleEdit = async (id, updatedData) => {
+    try {
+      await axios.put(`${API_BASE}/islemler/${id}`, {
+        ...updatedData,
+        personel_id: 1 
+      });
+    } catch (error) {
+      alert("İşlem güncellenirken hata oluştu.");
+    }
+  };
   
 const filteredIslemler = islemler.filter(islem => {
-    const personelMatch = !filters.personel_id || String(islem.personel_id) === String(filters.personel_id);
-    const tipMatch = !filters.tip || islem.tip === filters.tip;
-    
-    // Tarih filtreleme (islem.tarih formatınıza göre düzenleyin)
-    const islemTarihi = islem.islem_tarihi?.split('T')[0]; 
-    const tarihMatch = !filters.tarih || islemTarihi === filters.tarih;
-
-    return personelMatch && tipMatch && tarihMatch;
+      const personelMatch = !filters.personel_id || String(islem.personel_id) === String(filters.personel_id);
+      const tipMatch = !filters.tip || islem.tip === filters.tip;
+      const islemTarihi = islem.islem_tarihi?.split('T')[0]; 
+      const tarihMatch = !filters.tarih || islemTarihi === filters.tarih;
+  
+      return personelMatch && tipMatch && tarihMatch;
   });
 
   useEffect(() => {

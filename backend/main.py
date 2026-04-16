@@ -763,7 +763,7 @@ def _get_market_data_cached():
         return _market_with_trends(_market_cache_data, _market_cache_prev_data)
 
 
-def _query_islemler(conn, gunler, tip=None, personel_id=None, limit=None):
+def _query_islemler(conn, gunler=None, start_date=None, end_date=None, tip=None, personel_id=None, limit=None):
     cursor = conn.cursor()
     query = """
         SELECT i.id, i.islem_tarihi, i.islem_tipi, i.urun_cinsi,
@@ -772,23 +772,38 @@ def _query_islemler(conn, gunler, tip=None, personel_id=None, limit=None):
                i.personel_id
         FROM islemler i
         LEFT JOIN personeller p ON p.id = i.personel_id
-        WHERE i.islem_tarihi >= NOW() - (%s * INTERVAL '1 day')
+        WHERE 1=1
     """
-    params: list = [gunler]
+    params = []
+
+    # Dinamik Tarih Filtreleme
+    if start_date and end_date:
+        # Belirli iki tarih arası (Örn: 2023-01-01 ile 2023-01-10 arası)
+        query += " AND i.islem_tarihi::date BETWEEN %s AND %s"
+        params.extend([start_date, end_date])
+    elif start_date:
+        # Sadece belirli bir günden sonrası veya sadece o gün (Tek gün seçimi için end_date ile aynı gönderilir)
+        query += " AND i.islem_tarihi::date = %s"
+        params.append(start_date)
+    elif gunler is not None:
+        # Geleneksel "Son X gün" mantığı (Geriye dönük uyumluluk için)
+        query += " AND i.islem_tarihi >= NOW() - (%s * INTERVAL '1 day')"
+        params.append(gunler)
+
     if tip:
-        tip_upper = tip.strip().upper()
-        if tip_upper not in {"ALIS", "SATIS"}:
-            cursor.close()
-            raise HTTPException(status_code=400, detail="tip parametresi ALIS veya SATIS olmalıdır.")
         query += " AND i.islem_tipi = %s"
-        params.append(tip_upper)
+        params.append(tip.upper())
+    
     if personel_id is not None:
         query += " AND i.personel_id = %s"
         params.append(personel_id)
+
     query += " ORDER BY i.islem_tarihi DESC"
-    if limit is not None:
+    
+    if limit:
         query += " LIMIT %s"
         params.append(limit)
+
     cursor.execute(query, tuple(params))
     rows = cursor.fetchall()
     cursor.close()
@@ -1017,15 +1032,17 @@ def personel_sil(personel_id: int):
 
 @app.get("/islemler")
 def islemleri_getir(
-    gunler: int = Query(30, ge=1, le=365),
+    gunler: int | None = Query(None),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
     tip: str | None = Query(None),
     personel_id: int | None = Query(None),
-    limit: int | None = Query(None, ge=1, le=500),
+    limit: int | None = Query(None)
 ):
     conn = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        rows = _query_islemler(conn, gunler=gunler, tip=tip, personel_id=personel_id, limit=limit)
+        rows = _query_islemler(conn, gunler, start_date, end_date, tip, personel_id, limit)
         return [
             {
                 "id": r[0],
@@ -1169,14 +1186,27 @@ class CorporatePDF(FPDF):
 
 @app.get("/rapor/pdf")
 def generate_pdf_report(
-    gunler: int = Query(30, ge=1, le=365),
+    gunler: int | None = Query(None),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
     tip: str | None = Query(None),
     personel_id: int | None = Query(None),
 ):
     conn = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        rows = _query_islemler(conn, gunler=gunler, tip=tip, personel_id=personel_id, limit=500)
+        
+        # 1. İşlemleri artık yeni dinamik filtreleme motorumuzla çekiyoruz
+        rows = _query_islemler(
+            conn, 
+            gunler=gunler, 
+            start_date=start_date, 
+            end_date=end_date, 
+            tip=tip, 
+            personel_id=personel_id, 
+            limit=500
+        )
+        
         toplam_alis  = sum(float(r[5] or 0) for r in rows if r[2] == "ALIS")
         toplam_satis = sum(float(r[5] or 0) for r in rows if r[2] == "SATIS")
         net_has = toplam_alis - toplam_satis
@@ -1200,7 +1230,19 @@ def generate_pdf_report(
         pdf.set_font("Corporate", "", 15)
         pdf.cell(0, 10, "ÇAPAR KUYUMCULUK - KURUMSAL İŞLEM RAPORU", ln=1, align="C")
         pdf.set_font("Corporate", "", 10)
-        pdf.cell(0, 6, f"Rapor Tarihi: {time.strftime('%d.%m.%Y %H:%M')}", ln=1, align="R")
+        
+        # 2. PDF Başlığına Tarih Bilgisini Dinamik Yazdıralım
+        if start_date and end_date and start_date != end_date:
+            rapor_kapsami = f"Kapsam: {start_date} / {end_date}"
+        elif start_date:
+            rapor_kapsami = f"Kapsam: {start_date} (Tek Gün)"
+        elif gunler:
+            rapor_kapsami = f"Kapsam: Son {gunler} Gün"
+        else:
+            rapor_kapsami = "Kapsam: Tüm İşlemler"
+            
+        pdf.cell(0, 6, rapor_kapsami, ln=1, align="R")
+        pdf.cell(0, 6, f"Çıktı Tarihi: {time.strftime('%d.%m.%Y %H:%M')}", ln=1, align="R")
         pdf.ln(2)
 
         pdf.set_fill_color(245, 245, 245)
