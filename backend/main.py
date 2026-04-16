@@ -40,12 +40,24 @@ DB_CONFIG = {
     "port": "5432",
 }
 
+# Mevcut MILYEM_MAP aynen kalıyor
 MILYEM_MAP = {
     "24_AYAR": 1.0000,
     "22_AYAR": 0.9160,
     "18_AYAR": 0.7500,
     "14_AYAR": 0.5850,
 }
+
+# YENİ SABİTLER: Sarrafiye için standart adet->has dönüşümü (Yaklaşık değerler, isteğe göre revize edilebilir)
+SARRAFIYE_MAP = {
+    "çeyrek": {"urun_cinsi": "CEYREK_ALTIN", "has_karsiligi": 1.605},  # ~1.75 gr * 0.916
+    "yarım": {"urun_cinsi": "YARIM_ALTIN", "has_karsiligi": 3.210},    # ~3.50 gr * 0.916
+    "tam": {"urun_cinsi": "TAM_ALTIN", "has_karsiligi": 6.420},        # ~7.00 gr * 0.916
+    "ata": {"urun_cinsi": "ATA_ALTIN", "has_karsiligi": 6.600},        # ~7.20 gr * 0.916
+}
+
+# Pırlanta tanıyıcı kelimeler
+PIRLANTA_KELIMELER = ["pırlanta", "elmas", "tektaş", "beştaş"]
 
 SAYILAR = {
     "sıfır": 0,   "bir": 1,    "iki": 2,    "üç": 3,    "dört": 4,
@@ -542,11 +554,7 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     metin = metni_sayiya_dok(ham_metin)
     
     # 🌟 3. HASSAS ONDALIK BİRLEŞTİRİCİ 🌟
-    # Önce noktanın sağındaki ve solundaki boşlukları kesin olarak kapatır ("20 . 0 5" -> "20.0 5")
     metin = metin.replace(" . ", ".").replace(" .", ".").replace(". ", ".")
-    
-    # Ardından noktadan sonra kopuk kalmış tüüüm rakamları birleştirir ("20.0 1 1 7" -> "20.0117")
-    # '22 ayar' gibi kelimelerin rakamlarını yutmaması için "(?!\s+ayar)" (ayar koruması) eklenmiştir.
     eski_metin = ""
     while metin != eski_metin:
         eski_metin = metin
@@ -554,20 +562,15 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     
     print(f"  [İşlenen metin]: {metin}")
 
-    # Geri alma kontrolü
+    # --- GERİ ALMA KONTROLÜ ---
     silme_kelimeleri = [
-        "işlemi sil", 
-        "kaydı sil", 
-        "işlemi iptal et", 
-        "işlemi geri al", 
-        "son işlemi", 
-        "yanlış oldu"
+        "işlemi sil", "kaydı sil", "işlemi iptal et", 
+        "işlemi geri al", "son işlemi", "yanlış oldu"
     ]
-
     if any(k in metin for k in silme_kelimeleri):
         return {"tip": "UNDO_REQUEST", "personel_id": personel_id}
 
-    # İşlem tipi
+    # --- İŞLEM TİPİ KONTROLÜ ---
     if "alış" in metin or "alıs" in metin or "aliş" in metin or "alis" in metin:
         islem_tipi = "ALIS"
     elif "satış" in metin or "satis" in metin or "satiş" in metin:
@@ -575,10 +578,46 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     else:
         return {"hata": f"İşlem tipi bulunamadı. Duyulan: {ham_metin}"}
 
-    # Ayar tespiti
+    # --- FİYAT / TUTAR KONTROLÜ (Ortak) ---
+    fiyat_match = re.search(r"(?:fiyat|tutar|lira|dolar|euro)\s*(\d+(?:\.\d+)?)", metin)
+    birim_fiyat = float(fiyat_match.group(1)) if fiyat_match else 0.0
+
+    # 💎 SENARYO 1: PIRLANTA KONTROLÜ (Adet Bazlı)
+    pirlanta_kelimeler = ["pırlanta", "elmas", "tektaş", "beştaş"]
+    if any(pk in metin for pk in pirlanta_kelimeler):
+        adet_match = re.search(r"(\d+)\s*(?:adet|tane)?\s*(?:pırlanta|elmas|tektaş|beştaş)", metin)
+        miktar = float(adet_match.group(1)) if adet_match else 1.0
+        return {
+            "tip": "NORMAL_TX", "personel_id": personel_id, "islem_tipi": islem_tipi,
+            "urun_kategorisi": "PIRLANTA", "urun_cinsi": "PIRLANTA",
+            "islem_birimi": "ADET", "miktar": miktar, "birim_fiyat": birim_fiyat,
+            "milyem": 0.0, "net_has": 0.0
+        }
+
+    # 🪙 SENARYO 2: SARRAFİYE KONTROLÜ (Adet Bazlı)
+    sarrafiye_map = {
+        "çeyrek": {"urun_cinsi": "CEYREK_ALTIN", "has_karsiligi": 1.605},
+        "yarım": {"urun_cinsi": "YARIM_ALTIN", "has_karsiligi": 3.210},
+        "tam": {"urun_cinsi": "TAM_ALTIN", "has_karsiligi": 6.420},
+        "ata": {"urun_cinsi": "ATA_ALTIN", "has_karsiligi": 6.600},
+    }
+    sarrafiye_kelimesi = next((k for k in sarrafiye_map.keys() if k in metin), None)
+    if sarrafiye_kelimesi:
+        adet_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:adet|tane)?\s*" + sarrafiye_kelimesi, metin)
+        miktar = float(adet_match.group(1)) if adet_match else 1.0
+        s_data = sarrafiye_map[sarrafiye_kelimesi]
+        hesaplanan_has = round(miktar * s_data["has_karsiligi"], 3)
+        return {
+            "tip": "NORMAL_TX", "personel_id": personel_id, "islem_tipi": islem_tipi,
+            "urun_kategorisi": "SARRAFIYE", "urun_cinsi": s_data["urun_cinsi"],
+            "islem_birimi": "ADET", "miktar": miktar, "birim_fiyat": birim_fiyat,
+            "milyem": 0.0, "net_has": hesaplanan_has
+        }
+
+    # 🏆 SENARYO 3: HAS ALTIN / HURDA (Mevcut Gramajlı Sistem)
     ayar_match = re.search(r"\b(14|18|22|24)\b", metin)
     if not ayar_match:
-        return {"hata": f"Altın ayarı bulunamadı. Duyulan: {ham_metin}"}
+        return {"hata": f"Ürün kategorisi veya altın ayarı bulunamadı. Duyulan: {ham_metin}"}
     
     ayar_degeri = ayar_match.group(1)
     urun_cinsi = f"{ayar_degeri}_AYAR"
@@ -596,28 +635,27 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     if not miktar_match:
         return {"hata": f"Miktar (gram) bulunamadı. Duyulan: {ham_metin}"}
 
-    brut_miktar = float(miktar_match.group(1).replace(",", "."))
-    
-    # Sıfır miktar kontrolü
-    if brut_miktar <= 0:
-        return {"hata": f"Geçersiz miktar: {brut_miktar}"}
-
-    # Fiyat (opsiyonel)
-    fiyat_match = re.search(r"(?:fiyat|tutar|lira)\s*(\d+(?:\.\d+)?)", metin)
-    birim_fiyat = float(fiyat_match.group(1)) if fiyat_match else 0.0
+    miktar = float(miktar_match.group(1).replace(",", "."))
+    if miktar <= 0:
+        return {"hata": f"Geçersiz miktar: {miktar}"}
 
     milyem = MILYEM_MAP.get(urun_cinsi, 0.0)
+    hesaplanan_has = miktar * milyem
     
-    print(f"  [Ayristirma]: tip={islem_tipi}, ayar={urun_cinsi}, miktar={brut_miktar}, milyem={milyem}")
+    print(f"  [Ayrıştırma]: tip={islem_tipi}, kategori=ALTIN, ayar={urun_cinsi}, miktar={miktar}, milyem={milyem}")
 
     return {
         "tip": "NORMAL_TX",
         "personel_id": personel_id,
         "islem_tipi": islem_tipi,
+        "urun_kategorisi": "ALTIN",
+        "islem_birimi": "GRAM",
         "urun_cinsi": urun_cinsi,
-        "brut_miktar": brut_miktar,
+        "miktar": miktar,            # Eski sistemde 'brut_miktar' idi, yenisine 'miktar' olarak adapte edildi.
+        "brut_miktar": miktar,       # Hata vermesin diye (geriye dönük uyumluluk) buraya da ekledik
         "birim_fiyat": birim_fiyat,
         "milyem": milyem,
+        "net_has": hesaplanan_has
     }
 
 
@@ -629,26 +667,27 @@ def veritabanina_yaz(islem: dict) -> bool:
         conn   = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
-        # 1. Has miktarını veritabanına bırakmadan Python tarafında hesaplıyoruz
-        brut = float(islem["brut_miktar"])
-        milyem = float(islem["milyem"])
-        hesaplanan_has = brut * milyem
+        # 1. Artık has hesaplamasını burada yapmıyoruz, çünkü sesli_komutu_ayristir 
+        # fonksiyonu bize hesaplanmış 'net_has' değerini doğrudan sözlük (dict) içinde gönderiyor.
         
-        # 2. INSERT sorgusuna net_has_miktar alanını ekliyoruz
+        # 2. INSERT sorgusuna urun_kategorisi ve islem_birimi alanlarını ekliyoruz
         cursor.execute(
             """
-            INSERT INTO islemler (personel_id, islem_tipi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO islemler 
+            (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 islem["personel_id"],
                 islem["islem_tipi"],
+                islem.get("urun_kategorisi", "ALTIN"),  # Eski manuel işlemler patlamasın diye default: ALTIN
+                islem.get("islem_birimi", "GRAM"),      # Eski manuel işlemler patlamasın diye default: GRAM
                 islem["urun_cinsi"],
-                brut,
-                milyem,
+                islem["miktar"],                        # Artık gram (10.5) veya adet (3) olabilir
+                islem["milyem"],
                 islem["birim_fiyat"],
-                hesaplanan_has  # 👈 Hesaplanan net has miktarını sorguya gönderiyoruz
+                islem["net_has"]                        # 👈 Parser'dan gelen kesin has miktarı
             ),
         )
         row = cursor.fetchone()
@@ -662,15 +701,18 @@ def veritabanina_yaz(islem: dict) -> bool:
         cursor.close()
         conn.close()
 
-        # 3. Dashboard'a yeni işlemi broadcast ederken hesaplanan_has'ı kullanıyoruz
+        # 3. Dashboard'a işlemi broadcast ederken yeni alanları da (kategori ve birim) gönderiyoruz
         payload = json.dumps({
-            "type":   "NEW_TX",
-            "id":     row_id,
-            "tip":    islem["islem_tipi"],
-            "miktar": islem["brut_miktar"],
-            "ayar":   islem["urun_cinsi"],
-            "has":    hesaplanan_has, # 👈 RETURNING'den beklemek yerine değişkeni basıyoruz
+            "type":     "NEW_TX",
+            "id":       row_id,
+            "tip":      islem["islem_tipi"],
+            "kategori": islem.get("urun_kategorisi", "ALTIN"),
+            "birim":    islem.get("islem_birimi", "GRAM"),
+            "miktar":   islem["miktar"],
+            "ayar":     islem["urun_cinsi"],
+            "has":      islem["net_has"], 
         }, ensure_ascii=False)
+        
         broadcast_from_thread(payload)
         
         return True # Başarılı olduğunu bildir
