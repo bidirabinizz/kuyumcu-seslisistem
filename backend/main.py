@@ -184,7 +184,8 @@ async def lifespan(app: FastAPI):
     print("[AI] Modeller yükleniyor...")
     try:
         vosk_model = Model("model")
-        whisper_model = whisper.load_model("small")
+        from faster_whisper import WhisperModel
+        whisper_model = WhisperModel("medium", device="cpu", compute_type="int8")
         print("[AI] Modeller yüklendi.")
     except Exception as e:
         print(f"[UYARI] Model yüklenemedi: {e}")
@@ -360,27 +361,38 @@ async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
                 # VOSK'a sesi göndererek kullanıcının cümleyi bitirip es (duraksama) vermesini bekle
                 cumle_bitti = recognizer.AcceptWaveform(bytes(data))
                 
-                zaman_doldu = len(audio_buffer) >= 16000 * 2 * 6  # Maksimum 6 saniye süre tanı
-                min_sure_gecti = len(audio_buffer) > 16000 * 2 * 2.5 # "Dinliyorum" sesinin bitmesi için en az 2.5 sn bekle
+                # 🌟 DEĞİŞİKLİK BURADA: Süreleri uzatıyoruz 🌟
+                # Maksimum süreyi 6 saniyeden 10 saniyeye çıkarıyoruz (Düşünme payı)
+                zaman_doldu = len(audio_buffer) >= 16000 * 2 * 10  
                 
-                # Kullanıcı sustuysa (ve en az 2.5 sn geçtiyse) VEYA 6 saniyelik maksimum sınır dolduysa
+                # Minimum süreyi 2.5 saniyeden 3.8 saniyeye çıkarıyoruz. 
+                # (Kullanıcı nefes alsa bile 3.8 saniye dolmadan asistan sözünü kesmeyecek)
+                min_sure_gecti = len(audio_buffer) > 16000 * 2 * 3.8 
+                
+                # Kullanıcı sustuysa (ve en az 3.8 sn geçtiyse) VEYA 10 saniyelik maksimum sınır dolduysa
                 if (cumle_bitti and min_sure_gecti) or zaman_doldu:
                     await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "THINKING", "personel_id": personel_id}))
                     
                     audio_np = (np.frombuffer(bytes(audio_buffer), dtype=np.int16).astype(np.float32) / 32768.0)
                     loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(
-    None,
-    lambda: whisper_model.transcribe(
-        audio_np,
-        language="tr",
-        fp16=False,
-        initial_prompt=WHISPER_PROMPT,  # ← BUNU EKLE
-        temperature=0.0,                # ← Deterministic, hallüsinasyon azalır
-        condition_on_previous_text=False,  # ← Önceki metne bağlı kalmasın
-    )
-)
-                    komut_metni = result["text"].strip()
+
+                    def faster_transcribe():
+                        segments, info = whisper_model.transcribe(
+                            audio_np,
+                            language="tr",
+                            initial_prompt=WHISPER_PROMPT,
+                            temperature=0.0,
+                            condition_on_previous_text=False,
+                            vad_filter=True,
+                            vad_parameters=dict(
+                                min_silence_duration_ms=500,
+                                speech_pad_ms=200,
+                            ),
+                            beam_size=5,
+                        )
+                        return "".join(s.text for s in segments).strip()
+
+                    komut_metni = await loop.run_in_executor(None, faster_transcribe)
                     islem = sesli_komutu_ayristir(komut_metni, personel_id)
 
                     # DURUM A: Geri Alma İsteği
@@ -522,11 +534,36 @@ def metni_sayiya_dok(metin: str) -> str:
 
 
 def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
+    # 1. Kelimeleri matematiksel sembollere çevir
+    ham_metin = ham_metin.lower()
+    ham_metin = ham_metin.replace("nokta", ".").replace("virgül", ".").replace("buçuk", ".5")
+    
+    # 2. Yazıyla söylenen sayıları (yirmi, yüz vs.) rakamlara dönüştür
     metin = metni_sayiya_dok(ham_metin)
+    
+    # 🌟 3. HASSAS ONDALIK BİRLEŞTİRİCİ 🌟
+    # Önce noktanın sağındaki ve solundaki boşlukları kesin olarak kapatır ("20 . 0 5" -> "20.0 5")
+    metin = metin.replace(" . ", ".").replace(" .", ".").replace(". ", ".")
+    
+    # Ardından noktadan sonra kopuk kalmış tüüüm rakamları birleştirir ("20.0 1 1 7" -> "20.0117")
+    # '22 ayar' gibi kelimelerin rakamlarını yutmaması için "(?!\s+ayar)" (ayar koruması) eklenmiştir.
+    eski_metin = ""
+    while metin != eski_metin:
+        eski_metin = metin
+        metin = re.sub(r"(\d+\.\d*)\s+(\d+)(?!\s+ayar)", r"\1\2", metin)
+    
     print(f"  [İşlenen metin]: {metin}")
 
     # Geri alma kontrolü
-    silme_kelimeleri = ["sil", "iptal et", "geri al", "son işlemi", "yanlış oldu"]
+    silme_kelimeleri = [
+        "işlemi sil", 
+        "kaydı sil", 
+        "işlemi iptal et", 
+        "işlemi geri al", 
+        "son işlemi", 
+        "yanlış oldu"
+    ]
+
     if any(k in metin for k in silme_kelimeleri):
         return {"tip": "UNDO_REQUEST", "personel_id": personel_id}
 
@@ -548,7 +585,6 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
     ayar_pos = ayar_match.start()  # Ayarın metindeki konumu
 
     # Miktar: ayar sayısından SONRA gelen ilk sayıyı al
-    # "alış 24 ayar 24 gram" → ayar=24, sonrasında "24 gram" var → miktar=24
     metin_sonrasi = metin[ayar_pos + len(ayar_degeri):]
     miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", metin_sonrasi)
     
@@ -593,20 +629,26 @@ def veritabanina_yaz(islem: dict) -> bool:
         conn   = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
-        # DİKKAT: Yorum satırı SQL sorgusunun içinden kaldırıldı!
+        # 1. Has miktarını veritabanına bırakmadan Python tarafında hesaplıyoruz
+        brut = float(islem["brut_miktar"])
+        milyem = float(islem["milyem"])
+        hesaplanan_has = brut * milyem
+        
+        # 2. INSERT sorgusuna net_has_miktar alanını ekliyoruz
         cursor.execute(
             """
-            INSERT INTO islemler (personel_id, islem_tipi, urun_cinsi, brut_miktar, milyem, birim_fiyat)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id, net_has_miktar;
+            INSERT INTO islemler (personel_id, islem_tipi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
             """,
             (
                 islem["personel_id"],
                 islem["islem_tipi"],
                 islem["urun_cinsi"],
-                islem["brut_miktar"],
-                islem["milyem"],
+                brut,
+                milyem,
                 islem["birim_fiyat"],
+                hesaplanan_has  # 👈 Hesaplanan net has miktarını sorguya gönderiyoruz
             ),
         )
         row = cursor.fetchone()
@@ -614,21 +656,20 @@ def veritabanina_yaz(islem: dict) -> bool:
         if not row:
             raise Exception("Veritabanı id döndürmedi.")
             
-        row_id, net_has = row
-        net_has = float(net_has if net_has is not None else 0.0)
+        row_id = row[0]
         
         conn.commit()
         cursor.close()
         conn.close()
 
-        # Dashboard'a yeni işlem olarak fırlat
+        # 3. Dashboard'a yeni işlemi broadcast ederken hesaplanan_has'ı kullanıyoruz
         payload = json.dumps({
             "type":   "NEW_TX",
             "id":     row_id,
             "tip":    islem["islem_tipi"],
             "miktar": islem["brut_miktar"],
             "ayar":   islem["urun_cinsi"],
-            "has":    net_has,
+            "has":    hesaplanan_has, # 👈 RETURNING'den beklemek yerine değişkeni basıyoruz
         }, ensure_ascii=False)
         broadcast_from_thread(payload)
         
