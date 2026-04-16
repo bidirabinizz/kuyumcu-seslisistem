@@ -243,6 +243,8 @@ class IslemPayload(BaseModel):
     urun_cinsi: str      # "24_AYAR", "22_AYAR", "18_AYAR", "14_AYAR"
     brut_miktar: float   # Gram cinsinden
     birim_fiyat: float   # İşlemin yapıldığı TL fiyatı (Birim veya Toplam, DB mantığına göre)
+    urun_kategorisi: str = "ALTIN"
+    islem_birimi: str = "GRAM"
 
 
 def normalize_tetikleme_kelimesi(kelime: str) -> str:
@@ -701,7 +703,6 @@ def veritabanina_yaz(islem: dict) -> bool:
         cursor.close()
         conn.close()
 
-        # 3. Dashboard'a işlemi broadcast ederken yeni alanları da (kategori ve birim) gönderiyoruz
         payload = json.dumps({
             "type":     "NEW_TX",
             "id":       row_id,
@@ -715,12 +716,11 @@ def veritabanina_yaz(islem: dict) -> bool:
         
         broadcast_from_thread(payload)
         
-        return True # Başarılı olduğunu bildir
+        return True
 
     except Exception as e:
         print(f"  [DB HATA]: {e}")
-        return False # Başarısız olduğunu bildir
-
+        return False
 
 # ─────────────────────────────────────────────
 # YARDIMCI FONKSİYONLAR
@@ -882,7 +882,7 @@ def personelleri_getir():
 async def manuel_islem_ekle(payload: IslemPayload):
     """
     Frontend (Web) üzerinden manuel alış/satış işlemi ekler.
-    Has hesaplamasını Python tarafında yaparak veritabanı hatalarını (NoneType) önler.
+    Kategoriye göre (Altın, Sarrafiye, Pırlanta) has hesaplamasını dinamik yapar.
     """
     conn = None
     try:
@@ -892,48 +892,80 @@ async def manuel_islem_ekle(payload: IslemPayload):
             raise HTTPException(status_code=400, detail="Geçersiz işlem tipi.")
 
         urun_cinsi = payload.urun_cinsi.strip().upper()
-        milyem = MILYEM_MAP.get(urun_cinsi)
-        if milyem is None:
-            raise HTTPException(status_code=400, detail="Geçersiz ayar.")
-
-        # 🌟 KRİTİK DÜZELTME: Has miktarını veritabanına bırakmadan biz hesaplıyoruz
+        urun_kategorisi = payload.urun_kategorisi.strip().upper()
+        islem_birimi = payload.islem_birimi.strip().upper()
         brut = float(payload.brut_miktar)
-        hesaplanan_has = brut * milyem
+        
+        milyem = 0.0
+        hesaplanan_has = 0.0
 
-        # 2. Veritabanına Yazma İşlemi
+        # 2. Kategoriye Göre Has Hesaplama Mantığı
+        if urun_kategorisi == "PIRLANTA":
+            # Pırlantada has olmaz, direkt 0 yazılır. Tutar (birim_fiyat) önemlidir.
+            milyem = 0.0
+            hesaplanan_has = 0.0
+            
+        elif urun_kategorisi == "SARRAFIYE":
+            # Sarrafiye için has karşılıkları (Adet * Sabit Has)
+            sarrafiye_has_map = {
+                "CEYREK_ALTIN": 1.605,
+                "YARIM_ALTIN": 3.210,
+                "TAM_ALTIN": 6.420,
+                "ATA_ALTIN": 6.600,
+            }
+            has_karsiligi = sarrafiye_has_map.get(urun_cinsi)
+            
+            if has_karsiligi is None:
+                raise HTTPException(status_code=400, detail="Geçersiz sarrafiye cinsi.")
+            
+            hesaplanan_has = round(brut * has_karsiligi, 3)
+            
+        else:
+            # Standart ALTIN / HURDA mantığı (Gram * Milyem)
+            milyem = MILYEM_MAP.get(urun_cinsi)
+            if milyem is None:
+                raise HTTPException(status_code=400, detail="Geçersiz altın ayarı.")
+                
+            hesaplanan_has = brut * milyem
+
+        # 3. Veritabanına Yazma İşlemi
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
 
         cursor.execute(
             """
-            INSERT INTO islemler (personel_id, islem_tipi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO islemler 
+            (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi, brut_miktar, milyem, birim_fiyat, net_has_miktar)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 payload.personel_id,
                 islem_tipi,
+                urun_kategorisi,
+                islem_birimi,
                 urun_cinsi,
                 brut,
                 milyem,
                 payload.birim_fiyat,
-                hesaplanan_has  # 👈 Hesaplanan net_has_miktar direkt DB'ye yazılıyor
+                hesaplanan_has
             ),
         )
         
-        # Artık veritabanından has miktarını sormuyoruz, sadece kaydın ID'sini alıyoruz
         row_id = cursor.fetchone()[0]
         conn.commit()
         cursor.close()
 
-        # 3. WebSocket ile Tüm Ekranlara (Dashboard) Anlık Bildirim
+        # 4. WebSocket ile Tüm Ekranlara (Dashboard) Anlık Bildirim
         ws_payload = json.dumps({
-            "type":   "NEW_TX",
-            "id":     row_id,
-            "tip":    islem_tipi,
-            "miktar": brut,
-            "ayar":   urun_cinsi,
-            "has":    hesaplanan_has,
+            "type":     "NEW_TX",
+            "id":       row_id,
+            "tip":      islem_tipi,
+            "kategori": urun_kategorisi,
+            "birim":    islem_birimi,
+            "miktar":   brut,
+            "ayar":     urun_cinsi,
+            "has":      hesaplanan_has,
         }, ensure_ascii=False)
         
         await manager.broadcast_text(ws_payload)
@@ -948,7 +980,6 @@ async def manuel_islem_ekle(payload: IslemPayload):
         raise
     except Exception as e:
         if conn: conn.rollback()
-        # Hatayı konsola daha detaylı yazdırmak için:
         print(f"❌ [MANUEL İŞLEM HATASI]: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
