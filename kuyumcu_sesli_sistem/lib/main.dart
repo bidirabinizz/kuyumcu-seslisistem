@@ -301,119 +301,164 @@ void initState() {
 
   // ─── IP Ayarları ──────────────────────────────────────────────────────────
   void _ipAyarlari() {
-  // 1. ADIM: Mevcut IP'yi güvenli bir şekilde çek (split yerine RegExp)
-  final currentIp = RegExp(r"\d+\.\d+\.\d+\.\d+").stringMatch(AppConfig.apiBase) ?? "";
-  final controller = TextEditingController(text: currentIp);
+    final currentIp = RegExp(r"\d+\.\d+\.\d+\.\d+").stringMatch(AppConfig.apiBase) ?? "";
+    final controller = TextEditingController(text: currentIp);
+    bool isSearching = false;
 
-  showDialog(
-    context: context,
-    builder: (context) => Dialog(
-      backgroundColor: const Color(0xFF111111),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: const Color(0xFFD4AF37).withOpacity(0.3)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: const Color(0xFF111111),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: const Color(0xFFD4AF37).withOpacity(0.3)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.dns_outlined, color: Color(0xFFD4AF37), size: 20),
-                const SizedBox(width: 10),
+                Row(
+                  children: [
+                    const Icon(Icons.dns_outlined, color: Color(0xFFD4AF37), size: 20),
+                    const SizedBox(width: 10),
+                    const Text(
+                      "SUNUCU AYARLARI",
+                      style: TextStyle(
+                        color: Color(0xFFD4AF37),
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
                 const Text(
-                  "SUNUCU AYARLARI",
-                  style: TextStyle(
-                    color: Color(0xFFD4AF37),
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 2,
+                  "Sunucu IP Adresi",
+                  style: TextStyle(color: Colors.white54, fontSize: 12, letterSpacing: 1),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: controller,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  style: const TextStyle(color: Colors.white, fontFamily: 'monospace'),
+                  decoration: InputDecoration(
+                    hintText: "192.168.1.15",
+                    hintStyle: const TextStyle(color: Colors.white24),
+                    filled: true,
+                    fillColor: Colors.black.withOpacity(0.4),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: const Color(0xFFD4AF37).withOpacity(0.3)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Color(0xFFD4AF37)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                    ),
+                    prefixIcon: const Icon(Icons.router_outlined, color: Color(0xFFD4AF37), size: 18),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              "Sunucu IP Adresi",
-              style: TextStyle(color: Colors.white54, fontSize: 12, letterSpacing: 1),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: controller,
-              // 2. ADIM: Sadece rakam ve nokta girişi için klavyeyi ayarla
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              style: const TextStyle(color: Colors.white, fontFamily: 'monospace'),
-              decoration: InputDecoration(
-                hintText: "192.168.1.15",
-                hintStyle: const TextStyle(color: Colors.white24),
-                filled: true,
-                fillColor: Colors.black.withOpacity(0.4),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: const Color(0xFFD4AF37).withOpacity(0.3)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: Color(0xFFD4AF37)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
-                ),
-                prefixIcon: const Icon(Icons.router_outlined, color: Color(0xFFD4AF37), size: 18),
-              ),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(context),
+                const SizedBox(height: 16),
+                // Otomatik Bul Butonu
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: isSearching
+                        ? null
+                        : () async {
+                            setDialogState(() => isSearching = true);
+                            final ip = await AppConfig.otomatikIpBul();
+                            if (context.mounted) {
+                              setDialogState(() => isSearching = false);
+                              if (ip != null) {
+                                controller.text = ip;
+                                _showSnack("Sunucu bulundu: $ip");
+                              } else {
+                                _showSnack("Sunucu bulunamadı, IP'yi manuel girin.");
+                              }
+                            }
+                          },
                     style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                      side: BorderSide(color: const Color(0xFFD4AF37).withOpacity(0.5)),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    child: const Text("İPTAL", style: TextStyle(color: Colors.white54, letterSpacing: 1, fontSize: 12)),
+                    icon: isSearching
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFFD4AF37),
+                            ),
+                          )
+                        : const Icon(Icons.search_rounded, color: Color(0xFFD4AF37), size: 18),
+                    label: Text(
+                      isSearching ? "ARANIYOR..." : "OTOMATİK BUL",
+                      style: const TextStyle(
+                        color: Color(0xFFD4AF37),
+                        letterSpacing: 1,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      final input = controller.text.trim();
-                      // 3. ADIM: Kaydetmeden önce formatı kontrol et (RegExp doğrulama)
-                      if (RegExp(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$").hasMatch(input)) {
-                        await AppConfig.setHost(input);
-                        if (mounted) {
-                          Navigator.pop(context);
-                          _personelleriGetir();
-                        }
-                      } else {
-                        // Geçersiz format girilirse uyar
-                        _showSnack("Lütfen geçerli bir IP adresi girin (Örn: 192.168.1.10)");
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFD4AF37),
-                      foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      elevation: 0,
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(context),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text("İPTAL", style: TextStyle(color: Colors.white54, letterSpacing: 1, fontSize: 12)),
+                      ),
                     ),
-                    child: const Text("KAYDET", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1, fontSize: 12)),
-                  ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          final input = controller.text.trim();
+                          if (RegExp(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$").hasMatch(input)) {
+                            await AppConfig.setHost(input);
+                            if (mounted) {
+                              Navigator.pop(context);
+                              _personelleriGetir();
+                            }
+                          } else {
+                            _showSnack("Lütfen geçerli bir IP adresi girin (Örn: 192.168.1.10)");
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFD4AF37),
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          elevation: 0,
+                        ),
+                        child: const Text("KAYDET", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1, fontSize: 12)),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
+          ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   // ── Premium Çok Katmanlı Ses Halkası ────────────────────────────────────────
   Widget _buildWaveEffect() {

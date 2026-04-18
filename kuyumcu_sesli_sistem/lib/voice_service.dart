@@ -37,7 +37,7 @@ class IslemPreview {
       miktar:    (j['miktar']   ?? j['brut_miktar'] ?? 0).toDouble(),
       adet:      (j['adet']     ?? 1).toInt(),
       odemeTipi: j['odeme_tipi'] ?? 'NAKIT',
-      netHas:    (j['net_has']  ?? 0).toDouble(),
+      netHas:    (j['has'] ?? j['net_has_miktar'] ?? j['net_has'] ?? 0).toDouble(),
       uyari:     j['uyari'],
     );
   }

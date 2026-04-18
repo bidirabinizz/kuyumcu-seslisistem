@@ -671,9 +671,6 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
             sonuc["uyari"] = uyari
         return sonuc
 
-    # Ödeme tipini tüm senaryolar için şimdiden belirle
-    odeme_tipi = _odeme_tipini_ayristir(metin)
-
     # 🪙 SENARYO 2: SARRAFİYE KONTROLÜ (Merkezi Config'den — Adet Bazlı)
     sarrafiye_kelimesi = next((k for k in SARRAFIYE_CONFIG.keys() if k in metin), None)
     if sarrafiye_kelimesi:
@@ -706,22 +703,25 @@ def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
         return sonuc
 
     # 🏆 SENARYO 3: HAS ALTIN / HURDA (Mevcut Gramajlı Sistem)
-    ayar_match = re.search(r"\b(14|18|22|24)\b", metin)
+    # 1. Önce "24 ayar" gibi kesin kalıpları arayalım ki ondalık sayılarla karışmasın
+    ayar_match = re.search(r"\b(14|18|22|24)\s+ayar\b", metin)
+    
+    # 2. Eğer "ayar" kelimesini söylemediyse (örn: 10 gram 22 alış), 
+    # sağında solunda nokta/virgül olmayan yalıtılmış bir ayar değeri arayalım
+    if not ayar_match:
+        ayar_match = re.search(r"(?<![.,\d])\b(14|18|22|24)\b(?![.,\d])", metin)
+
     if not ayar_match:
         return {"hata": f"Ürün kategorisi veya altın ayarı bulunamadı. Duyulan: {ham_metin}"}
     
     ayar_degeri = ayar_match.group(1)
     urun_cinsi = f"{ayar_degeri}_AYAR"
-    ayar_pos = ayar_match.start()  # Ayarın metindeki konumu
-
-    # Miktar: ayar sayısından SONRA gelen ilk sayıyı al
-    metin_sonrasi = metin[ayar_pos + len(ayar_degeri):]
-    miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", metin_sonrasi)
     
-    if not miktar_match:
-        # Ayardan önce de dene (örn: "24 gram 24 ayar alış")
-        metin_oncesi = metin[:ayar_pos]
-        miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", metin_oncesi)
+    # 3. Miktarı doğru bulmak için tespit ettiğimiz "Ayar" kelimesini ve sayısını cümleden çıkartalım
+    metin_ayarsiz = metin[:ayar_match.start()] + metin[ayar_match.end():]
+    
+    # 4. Kalan metin içerisindeki ilk sayıyı (ondalıklı veya tam) miktar olarak alalım
+    miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", metin_ayarsiz)
     
     if not miktar_match:
         return {"hata": f"Miktar (gram) bulunamadı. Duyulan: {ham_metin}"}
@@ -1386,15 +1386,6 @@ def piyasa_kurlari():
 
 
 class CorporatePDF(FPDF):
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Corporate", "", 8)
-        self.set_text_color(120, 120, 120)
-        self.cell(0, 5, "Bu rapor Çapar ERP sistemi tarafından otomatik oluşturulmuştur.", align="L")
-        self.cell(0, 5, f"Sayfa {self.page_no()}", align="R")
-
-
-class CorporatePDF(FPDF):
     def header(self):
         # Altın sarısı üst çizgi vurgusu
         self.set_fill_color(212, 175, 55) # #D4AF37
@@ -1454,7 +1445,6 @@ def generate_pdf_report(
         if not font_path:
             raise RuntimeError("Unicode font bulunamadı.")
         pdf.add_font("Corporate", "", font_path, uni=True)
-        pdf.add_font("Corporate-Bold", "", font_path, uni=True) # Arial'ı bold gibi kullanacağız veya direkt fontu var sayacağız
 
         # --- BAŞLIK KISMI ---
         pdf.set_text_color(30, 30, 30)
