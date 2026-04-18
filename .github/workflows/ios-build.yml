@@ -24,30 +24,31 @@ jobs:
         working-directory: ./kuyumcu_sesli_sistem
         run: flutter pub get
 
-      - name: CocoaPods Kurulumu ve Guncellemesi
+      - name: CocoaPods Kurulumu
         working-directory: ./kuyumcu_sesli_sistem/ios
         run: |
           pod repo update
           pod install
 
-      # İŞTE MİMAR DOKUNUŞU: project.pbxproj dosyasına açık kalp ameliyatı
-      # Tüm imza ve takım dayatmalarını siliyoruz.
-      - name: Xcode Ana Proje Dosyasini (pbxproj) Kır
-        working-directory: ./kuyumcu_sesli_sistem
+      # İŞTE SON VURUŞ: Flutter CLI'ı devreden çıkarıp doğrudan Xcode'a emir veriyoruz
+      - name: Dogrudan Xcode ile Derleme (Mimar Bypass)
+        working-directory: ./kuyumcu_sesli_sistem/ios
         run: |
-          sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' ios/Runner.xcodeproj/project.pbxproj
-          sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' ios/Runner.xcodeproj/project.pbxproj
-          sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = "";/g' ios/Runner.xcodeproj/project.pbxproj
-
-      - name: iOS Derlemesi Al (Imzasiz)
-        working-directory: ./kuyumcu_sesli_sistem
-        run: flutter build ios --release --no-codesign
+          xcodebuild build \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            SYMROOT=$PWD/build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
 
       - name: IPA Dosyasini Paketle (Sideloadly Icin)
         working-directory: ./kuyumcu_sesli_sistem
         run: |
           mkdir Payload
-          mv build/ios/iphoneos/Runner.app Payload
+          mv ios/build/Release-iphoneos/Runner.app Payload/
           zip -qq -r kuyumcu_sistem.ipa Payload
 
       - name: Ciktiyi GitHub'a Yukle (Artifact)
