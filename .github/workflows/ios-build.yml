@@ -1,15 +1,19 @@
 name: iOS App Build (Unsigned IPA)
 
 on:
-  workflow_dispatch: # Bu ayar, derlemeyi GitHub üzerinden manuel bir butonla başlatmanı sağlar
+  workflow_dispatch:
+
+env:
+  # Node.js 20 sarı uyarısını susturup direkt 24'e zorluyoruz
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-ios:
     name: Build iOS
-    runs-on: macos-latest # GitHub'a "Bana bir Mac bilgisayar ver" diyoruz
+    runs-on: macos-latest
 
     steps:
-      - name: Kodları Çek (Checkout)
+      - name: Kodlari Cek (Checkout)
         uses: actions/checkout@v4
 
       - name: Flutter Kurulumu
@@ -17,22 +21,29 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Paketleri İndir
+      - name: Paketleri Indir
         working-directory: ./kuyumcu_sesli_sistem
         run: flutter pub get
 
-      - name: iOS Derlemesi Al (İmzasız)
+      # Exit Code 1 hatasını engellemek için iOS bağımlılıklarını zorla güncelliyoruz
+      - name: CocoaPods Kurulumu ve Guncellemesi
+        working-directory: ./kuyumcu_sesli_sistem/ios
+        run: |
+          pod repo update
+          pod install
+
+      - name: iOS Derlemesi Al (Imzasiz)
         working-directory: ./kuyumcu_sesli_sistem
         run: flutter build ios --release --no-codesign
 
-      - name: IPA Dosyasını Paketle (Sideloadly İçin)
+      - name: IPA Dosyasini Paketle (Sideloadly Icin)
         working-directory: ./kuyumcu_sesli_sistem
         run: |
           mkdir Payload
           mv build/ios/iphoneos/Runner.app Payload
           zip -qq -r kuyumcu_sistem.ipa Payload
 
-      - name: Çıktıyı GitHub'a Yükle (Artifact)
+      - name: Ciktiyi GitHub'a Yukle (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: Kuyumcu-iOS-App
