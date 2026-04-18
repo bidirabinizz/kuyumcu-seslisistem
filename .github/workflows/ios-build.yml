@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
 
 env:
-  # Node.js 20 sarı uyarısını susturup direkt 24'e zorluyoruz
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -25,12 +24,19 @@ jobs:
         working-directory: ./kuyumcu_sesli_sistem
         run: flutter pub get
 
-      # Exit Code 1 hatasını engellemek için iOS bağımlılıklarını zorla güncelliyoruz
       - name: CocoaPods Kurulumu ve Guncellemesi
         working-directory: ./kuyumcu_sesli_sistem/ios
         run: |
           pod repo update
           pod install
+
+      # İŞTE MİMAR DOKUNUŞU BURASI: Xcode'un imza şalterini zorla kapatıyoruz
+      - name: Xcode Imza Zorunlulugunu Kapat
+        working-directory: ./kuyumcu_sesli_sistem
+        run: |
+          echo "CODE_SIGNING_ALLOWED = NO" >> ios/Flutter/Release.xcconfig
+          echo "CODE_SIGNING_REQUIRED = NO" >> ios/Flutter/Release.xcconfig
+          echo "CODE_SIGN_IDENTITY = \"\"" >> ios/Flutter/Release.xcconfig
 
       - name: iOS Derlemesi Al (Imzasiz)
         working-directory: ./kuyumcu_sesli_sistem
