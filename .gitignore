@@ -1,7 +1,7 @@
 # --- AI & Media (En Önemli Kısım) ---
 # İndirdiğin Vosk veya Whisper modellerini asla pushlama
 model/
-models/
+Backend/models/
 *.wav
 *.mp3
 *.pdf
