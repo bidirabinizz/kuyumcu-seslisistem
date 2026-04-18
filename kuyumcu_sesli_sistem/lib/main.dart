@@ -2,14 +2,47 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:http/http.dart' as http;
 
 import 'models/personel.dart';
 import 'voice_service.dart';
 import 'config.dart';
+import 'background_service.dart';
+
+// ─── Hata Handler (Global, UI dışı) ─────────────────────────────────────────
+Future<void> _globalFlutterHataHandler() async {
+  // FlutterError (widget build hataları, binding hataları)
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details); // Release modda log'a yaz
+    debugPrint('[FlutterError] ${details.exceptionAsString()}');
+    debugPrint(details.stack.toString());
+    // NOT: burada crash raporlama servisi (Sentry vb.) çağrılabilir
+  };
+}
 
 void main() {
-  runApp(const KuyumcuApp());
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      // Platform hata ayarları
+      await _globalFlutterHataHandler();
+
+      // Foreground service yapılandır (uygulama başında bir kez)
+      await BackgroundServiceManager.init();
+
+      // Kayıtlı IP'yi yükle
+      await AppConfig.loadConfig();
+
+      runApp(const KuyumcuApp());
+    },
+    // Dart Zone'dan kaçan tüm yakalanmamış istisnalar buraya düşer
+    (error, stack) {
+      debugPrint('[ZoneError] $error');
+      debugPrint(stack.toString());
+    },
+  );
 }
 
 class KuyumcuApp extends StatelessWidget {
@@ -82,7 +115,8 @@ class _VoiceControlPageState extends State<VoiceControlPage>
 void initState() {
   super.initState();
   _initAnimations();
-  AppConfig.loadConfig().then((_) => _personelleriGetir());
+  // AppConfig.loadConfig() artık main() içinde çağrılıyor
+  _personelleriGetir();
   WidgetsBinding.instance.addObserver(this);
 
   _voiceService = VoiceService(
@@ -185,7 +219,10 @@ void initState() {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused && _isActive) {
-      _sistemDurdur();
+      // Arka plana atıldığında sistemi durdurmak yerine yalnızca bildirimi güncelle
+      BackgroundServiceManager.updateNotification('Arka planda sesli komut dinleniyor...');
+    } else if (state == AppLifecycleState.resumed && _isActive) {
+      BackgroundServiceManager.updateNotification('Sesli komut dinleniyor...');
     }
   }
 
@@ -266,6 +303,8 @@ void initState() {
         _statusMessage = "DİNLİYOR...";
       });
       _startAnimations();
+      // Foreground service başlat — arka plana atılınca da çalışmaya devam eder
+      await BackgroundServiceManager.start();
     } else {
       _showSnack("Mikrofon izni alınamadı veya bağlantı kurulamadı.");
     }
@@ -274,6 +313,8 @@ void initState() {
   void _sistemDurdur() {
     _voiceService.stopStreaming();
     _stopAnimations();
+    // Foreground servisi durdur
+    BackgroundServiceManager.stop();
     if (mounted) {
       setState(() {
         _isActive = false;

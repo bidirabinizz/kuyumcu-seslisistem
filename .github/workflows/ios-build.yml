@@ -1,0 +1,39 @@
+name: iOS App Build (Unsigned IPA)
+
+on:
+  workflow_dispatch: # Bu ayar, derlemeyi GitHub üzerinden manuel bir butonla başlatmanı sağlar
+
+jobs:
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest # GitHub'a "Bana bir Mac bilgisayar ver" diyoruz
+
+    steps:
+      - name: Kodları Çek (Checkout)
+        uses: actions/checkout@v3
+
+      - name: Flutter Kurulumu
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Paketleri İndir
+        working-directory: ./kuyumcu_sesli_sistem
+        run: flutter pub get
+
+      - name: iOS Derlemesi Al (İmzasız)
+        working-directory: ./kuyumcu_sesli_sistem
+        run: flutter build ios --release --no-codesign
+
+      - name: IPA Dosyasını Paketle (Sideloadly İçin)
+        working-directory: ./kuyumcu_sesli_sistem
+        run: |
+          mkdir Payload
+          mv build/ios/iphoneos/Runner.app Payload
+          zip -qq -r kuyumcu_sistem.ipa Payload
+
+      - name: Çıktıyı GitHub'a Yükle (Artifact)
+        uses: actions/upload-artifact@v3
+        with:
+          name: Kuyumcu-iOS-App
+          path: kuyumcu_sesli_sistem/kuyumcu_sistem.ipa

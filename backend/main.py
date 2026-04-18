@@ -8,6 +8,7 @@ import time
 import urllib.request
 import warnings
 import platform
+import traceback
 import numpy as np
 import edge_tts
 if platform.system() == "Windows":
@@ -210,6 +211,38 @@ _tts_lock = threading.Lock()
 _tts_engine = None
 
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# UDP BROADCAST — Yerel Ağda Sunucu Keşfi
+# ─────────────────────────────────────────────
+UDP_BROADCAST_PORT = 55780
+UDP_BROADCAST_MSG  = b"KUYUMCU_ERP_SERVER"
+UDP_BROADCAST_ACK  = b"KUYUMCU_ERP_ACK"
+_udp_stop_event    = threading.Event()
+
+def _udp_broadcast_listener():
+    """UDP broadcast isteklerini dinler ve yerel IP ile yanıt verir."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(1.0)
+        try:
+            sock.bind(('', UDP_BROADCAST_PORT))
+            print(f"[UDP] Keşif servisi dinleniyor — port {UDP_BROADCAST_PORT}")
+        except OSError as e:
+            print(f"[UDP] Bind hatası: {e}")
+            return
+        while not _udp_stop_event.is_set():
+            try:
+                data, addr = sock.recvfrom(256)
+                if data == UDP_BROADCAST_MSG:
+                    local_ip = get_local_ip()
+                    payload  = UDP_BROADCAST_ACK + b":" + local_ip.encode()
+                    sock.sendto(payload, addr)
+                    print(f"[UDP] Keşif yanıtı gönderildi → {addr[0]} (IP: {local_ip})")
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"[UDP] Hata: {e}")
+
 # UYGULAMA YAŞAM DÖNGÜSÜ
 # ─────────────────────────────────────────────
 @asynccontextmanager
@@ -234,21 +267,68 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[UYARI] Personel wake word havuzu yüklenemedi: {e}")
 
-    # AI daemon thread'ini başlat (mikrofon tabanlı masaüstü modu)
-    # WebSocket modu aktifken bu thread'i kapatabilirsin
-    # ai_thread = threading.Thread(target=ai_motorunu_baslat, daemon=True)
-    # ai_thread.start()
+    # UDP keşif servisi — daemon thread olarak başlat
+    _udp_stop_event.clear()
+    udp_thread = threading.Thread(target=_udp_broadcast_listener, daemon=True)
+    udp_thread.start()
 
     yield
 
+    # Temizlik
+    _udp_stop_event.set()
+
 
 app = FastAPI(title="Kuyumcu ERP API", lifespan=lifespan)
+
+# ─────────────────────────────────────────────
+# GLOBAL EXCEPTION HANDLER — Crash Önleme
+# ─────────────────────────────────────────────
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class GlobalErrorMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            tb = traceback.format_exc()
+            print(f"[GLOBAL HATA] {request.method} {request.url}\n{tb}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "hata": "Sunucu tarafında beklenmedik bir hata oluştu.",
+                    "detay": str(exc),
+                    "tip": type(exc).__name__,
+                },
+            )
+
+@app.exception_handler(Exception)
+async def genel_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"[EXCEPTION HANDLER] {request.url}\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "hata": "İşlem sırasında bir hata oluştu.",
+            "detay": str(exc),
+            "tip": type(exc).__name__,
+        },
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"hata": exc.detail, "kod": exc.status_code},
+    )
 
 # Frontend bu adresi çağırıp IP'yi gösterecek
 @app.get("/sistem/ip")
 def get_server_ip():
     return {"ip": get_local_ip()}
 
+app.add_middleware(GlobalErrorMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

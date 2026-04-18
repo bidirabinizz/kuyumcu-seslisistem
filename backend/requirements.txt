@@ -1,0 +1,13 @@
+edge_tts==7.2.8
+fastapi==0.136.0
+faster_whisper==1.2.1
+fpdf2==2.8.7
+numpy==2.4.4
+openai_whisper==20250625
+psycopg2_binary==2.9.11
+pydantic==2.13.2
+pyttsx3==2.99
+sounddevice==0.5.5
+speechrecognition==3.16.0
+starlette==1.0.0
+vosk==0.3.45
