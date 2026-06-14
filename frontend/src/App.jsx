@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { Menu, X, TrendingUp, AlertCircle } from 'lucide-react';
+import { Analytics } from '@vercel/analytics/react';
 import { Sidebar }        from './components/Sidebar';
 import { LiveTicker }     from './components/LiveTicker';
 import { Dashboard }      from './pages/Dashboard';
@@ -22,6 +23,7 @@ export default function App() {
   return (
     <ToastProvider>
       <BrowserRouter>
+        <Analytics />
         <DailyKurPrompt />
         <Routes>
           {/* ── Kasa Ekranı — tam ekran, sidebar YOK ── */}
