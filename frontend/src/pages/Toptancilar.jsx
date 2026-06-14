@@ -257,6 +257,7 @@ export const Toptancilar = () => {
               </div>
             </form>
           </div>
+        </div>
       )}
 
       {/* GÜVENLİ TOPTANCI SİLME MODALI */}
