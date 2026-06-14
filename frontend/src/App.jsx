@@ -22,6 +22,7 @@ export default function App() {
 
   return (
     <ToastProvider>
+      <Analytics />
       <BrowserRouter>
         <Analytics />
         <DailyKurPrompt />
