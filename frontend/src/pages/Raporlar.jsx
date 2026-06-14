@@ -374,7 +374,9 @@ export const Raporlar = () => {
                     {r.has > 0 ? r.has : '-'}
                   </td>
                   {/* YENİ: Tutar Sütunu */}
-                  <td className="px-5 py-3 font-mono font-bold text-sm text-ink-600">
+                  <td className={`px-5 py-3 font-mono font-bold text-sm ${
+                    r.tip === 'SATIS' ? 'text-red-600' : 'text-emerald-700'
+                  }`}>
                     {r.birim_fiyat > 0 ? `₺${r.birim_fiyat.toLocaleString('tr-TR')}` : '-'}
                   </td>
                   {/* Ödeme tipi rozeti */}
