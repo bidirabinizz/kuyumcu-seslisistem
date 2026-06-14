@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Building2, Plus, Phone, Trash2, Search, ArrowRight } from 'lucide-react';
+import { Building2, Plus, Phone, Trash2, Search, ArrowRight, AlertTriangle, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { InfoTooltip } from '../components/InfoTooltip';
 import { API_BASE } from '../apiConfig';
@@ -10,6 +10,50 @@ export const Toptancilar = () => {
   const [modalAcik, setModalAcik] = useState(false);
   const [yeniToptanci, setYeniToptanci] = useState({ unvan: '', telefon: '', aciklama: '' });
   const [arama, setArama] = useState('');
+
+  // Güvenli Silme State'leri
+  const [silSeciliToptanci, setSilSeciliToptanci] = useState(null);
+  const [silOnayAdim, setSilOnayAdim] = useState(0); // 0: kapalı, 1: unvan girme, 2: emin misin?
+  const [silGirisUnvan, setSilGirisUnvan] = useState('');
+  const [silLoading, setSilLoading] = useState(false);
+  const [silHata, setSilHata] = useState('');
+
+  const handleSilmeBaslat = (t) => {
+    setSilSeciliToptanci(t);
+    setSilOnayAdim(1);
+    setSilGirisUnvan('');
+    setSilHata('');
+  };
+
+  const handleSilmeOnaylaAdim1 = (e) => {
+    e.preventDefault();
+    if (silGirisUnvan.trim() !== silSeciliToptanci.unvan.trim()) {
+      setSilHata('Firma adı eşleşmiyor. Lütfen tam olarak aynısını giriniz.');
+      return;
+    }
+    setSilHata('');
+    setSilOnayAdim(2);
+  };
+
+  const handleSilmeTamamla = async () => {
+    setSilLoading(true);
+    setSilHata('');
+    try {
+      const res = await fetch(`${API_BASE}/toptancilar/${silSeciliToptanci.id}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) {
+        throw new Error('Toptancı silinemedi.');
+      }
+      setSilOnayAdim(0);
+      setSilSeciliToptanci(null);
+      fetchToptancilar();
+    } catch (err) {
+      setSilHata(err.message || 'Bir hata oluştu.');
+    } finally {
+      setSilLoading(false);
+    }
+  };
 
   const fetchToptancilar = async () => {
     try {
@@ -138,12 +182,21 @@ export const Toptancilar = () => {
                 </div>
 
                 {/* Aksiyon */}
-                <Link
-                  to={`/toptancilar/${t.id}`}
-                  className="p-3 text-center bg-ink-900 text-white text-xs font-bold uppercase tracking-widest hover:bg-gold-500 transition-colors flex justify-center items-center gap-2"
-                >
-                  İşlemler <ArrowRight size={14} />
-                </Link>
+                <div className="flex border-t border-ink-100">
+                  <Link
+                    to={`/toptancilar/${t.id}`}
+                    className="flex-1 p-3 text-center bg-ink-900 text-white text-xs font-bold uppercase tracking-widest hover:bg-gold-500 transition-colors flex justify-center items-center gap-2"
+                  >
+                    İşlemler <ArrowRight size={14} />
+                  </Link>
+                  <button
+                    onClick={() => handleSilmeBaslat(t)}
+                    className="p-3 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center border-l border-ink-100"
+                    title="Toptancıyı Sil"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -203,6 +256,102 @@ export const Toptancilar = () => {
                 </button>
               </div>
             </form>
+          </div>
+      )}
+
+      {/* GÜVENLİ TOPTANCI SİLME MODALI */}
+      {silOnayAdim > 0 && silSeciliToptanci && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/40 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-md border border-red-100 premium-shadow p-6 relative">
+            <button
+              onClick={() => { setSilOnayAdim(0); setSilSeciliToptanci(null); }}
+              className="absolute top-4 right-4 w-8 h-8 rounded-lg text-ink-400 hover:text-ink-700 hover:bg-ink-50 flex items-center justify-center transition-all"
+            >
+              <X size={18} />
+            </button>
+
+            {silOnayAdim === 1 && (
+              <div>
+                <h3 className="text-lg font-black text-red-600 mb-2 flex items-center gap-2">
+                  <AlertTriangle className="text-red-500 animate-pulse" />
+                  Kalıcı Silme Güvenlik Doğrulaması
+                </h3>
+                <p className="text-xs text-ink-500 mb-4 leading-relaxed">
+                  <strong>{silSeciliToptanci.unvan}</strong> firmasını silmek istediğinizden emin misiniz? 
+                  Bu işlem firmaya ait <strong>tüm cari hesapları, işlemleri ve bakiyeleri</strong> kalıcı olarak silecektir. 
+                  Bu işlem geri alınamaz!
+                </p>
+                <form onSubmit={handleSilmeOnaylaAdim1} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-ink-500 uppercase tracking-wider mb-2">
+                      Onaylamak için firma adını tam olarak yazın:
+                    </label>
+                    <input
+                      type="text" required autoFocus
+                      placeholder={silSeciliToptanci.unvan}
+                      className="w-full bg-red-50/20 border border-red-100 p-3 text-sm font-bold text-ink-900 outline-none focus:border-red-500"
+                      value={silGirisUnvan}
+                      onChange={e => setSilGirisUnvan(e.target.value)}
+                    />
+                  </div>
+                  {silHata && (
+                    <p className="text-xs text-red-600 font-bold">{silHata}</p>
+                  )}
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => { setSilOnayAdim(0); setSilSeciliToptanci(null); }}
+                      className="flex-1 bg-ink-100 text-ink-700 py-3 font-bold hover:bg-ink-200 transition-all text-xs"
+                    >
+                      Vazgeç
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={silGirisUnvan.trim() !== silSeciliToptanci.unvan.trim()}
+                      className={`flex-1 py-3 font-bold transition-all text-xs text-white ${
+                        silGirisUnvan.trim() === silSeciliToptanci.unvan.trim()
+                          ? 'bg-red-600 hover:bg-red-700 shadow-lg shadow-red-600/20'
+                          : 'bg-ink-200 cursor-not-allowed text-ink-400'
+                      }`}
+                    >
+                      Devam Et
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {silOnayAdim === 2 && (
+              <div className="text-center">
+                <div className="w-12 h-12 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-100">
+                  <AlertTriangle size={24} />
+                </div>
+                <h3 className="text-lg font-black text-ink-900 mb-2">Son Kararınız Mı?</h3>
+                <p className="text-xs text-ink-500 mb-6 leading-relaxed">
+                  <strong>{silSeciliToptanci.unvan}</strong> firmasına ait tüm geçmiş datalar silinmek üzere. 
+                  Bu işlemi onaylıyor musunuz?
+                </p>
+                {silHata && (
+                  <p className="text-xs text-red-600 font-bold mb-4">{silHata}</p>
+                )}
+                <div className="flex gap-3">
+                  <button
+                    disabled={silLoading}
+                    onClick={() => { setSilOnayAdim(0); setSilSeciliToptanci(null); }}
+                    className="flex-1 bg-ink-100 text-ink-700 py-3 font-bold hover:bg-ink-200 transition-all text-xs"
+                  >
+                    Hayır, Vazgeç
+                  </button>
+                  <button
+                    disabled={silLoading}
+                    onClick={handleSilmeTamamla}
+                    className="flex-1 bg-red-600 text-white py-3 font-bold hover:bg-red-700 transition-all text-xs shadow-lg shadow-red-600/20 flex items-center justify-center gap-1.5"
+                  >
+                    {silLoading ? 'Siliniyor...' : 'Evet, Kesinlikle Sil'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
