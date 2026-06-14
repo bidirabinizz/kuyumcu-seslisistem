@@ -1431,23 +1431,45 @@ async def islem_duzenle(islem_id: int, payload: IslemPayload):
         if conn: conn.close()
 
 @app.get("/personeller/istatistik")
-def personel_istatistikleri():
+def personel_istatistikleri(
+    start_date: str | None = None,
+    end_date: str | None = None
+):
     conn = cursor = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         personeller_tablosunu_dogrula(conn)
         cursor = conn.cursor()
-        cursor.execute("""
+        
+        # LEFT JOIN ile bağlarken tarih filtresini ON şartına koymalıyız
+        # Aksi takdirde hiç işlemi olmayan personeller listeden kaybolur (INNER JOIN durumuna düşer)
+        date_filter = ""
+        params = []
+        if start_date and end_date:
+            date_filter = "AND i.islem_tarihi::date BETWEEN %s AND %s"
+            params.extend([start_date, end_date])
+        elif start_date:
+            date_filter = "AND i.islem_tarihi::date = %s"
+            params.append(start_date)
+
+        query = f"""
             SELECT p.id, p.ad_soyad, p.tetikleme_kelimesi, p.rol,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' THEN i.net_has_miktar ELSE 0 END),0) AS toplam_alis_has,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' THEN i.net_has_miktar ELSE 0 END),0) AS toplam_satis_has,
                    COALESCE(SUM(COALESCE(i.brut_miktar,0)*COALESCE(i.birim_fiyat,0)),0) AS toplam_tl_hacim,
-                   COUNT(i.id) AS islem_sayisi
+                   COUNT(i.id) AS islem_sayisi,
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' AND i.urun_kategorisi='ALTIN' THEN i.brut_miktar ELSE 0 END),0) AS toplam_alis_altin_gr,
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' AND i.urun_kategorisi='ALTIN' THEN i.brut_miktar ELSE 0 END),0) AS toplam_satis_altin_gr,
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' AND i.urun_kategorisi='SARRAFIYE' THEN i.brut_miktar ELSE 0 END),0) AS toplam_alis_sarrafiye_adet,
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' AND i.urun_kategorisi='SARRAFIYE' THEN i.brut_miktar ELSE 0 END),0) AS toplam_satis_sarrafiye_adet,
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' THEN COALESCE(i.brut_miktar,0)*COALESCE(i.birim_fiyat,0) ELSE 0 END),0) AS toplam_alis_tl,
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' THEN COALESCE(i.brut_miktar,0)*COALESCE(i.birim_fiyat,0) ELSE 0 END),0) AS toplam_satis_tl
             FROM personeller p
-            LEFT JOIN islemler i ON i.personel_id = p.id
+            LEFT JOIN islemler i ON i.personel_id = p.id {date_filter}
             GROUP BY p.id, p.ad_soyad, p.tetikleme_kelimesi, p.rol
             ORDER BY p.id ASC
-        """)
+        """
+        cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
         result = []
         for r in rows:
@@ -1460,6 +1482,12 @@ def personel_istatistikleri():
                 "toplam_tl_hacim": float(r[6] or 0),
                 "islem_sayisi": islem_sayisi,
                 "performans_skor": min(100, round(islem_sayisi * 2.5, 1)),
+                "toplam_alis_altin_gr": float(r[8] or 0),
+                "toplam_satis_altin_gr": float(r[9] or 0),
+                "toplam_alis_sarrafiye_adet": int(r[10] or 0),
+                "toplam_satis_sarrafiye_adet": int(r[11] or 0),
+                "toplam_alis_tl": float(r[12] or 0),
+                "toplam_satis_tl": float(r[13] or 0),
             })
         return result
     except RuntimeError as e:

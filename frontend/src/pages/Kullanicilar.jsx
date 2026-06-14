@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { UserPlus, Shield, Edit2, Trash2, X, Check, AlertTriangle } from 'lucide-react';
+import { UserPlus, Shield, Edit2, Trash2, X, Check, AlertTriangle, TrendingUp, TrendingDown, DollarSign, Calendar, RefreshCw, BarChart2 } from 'lucide-react';
 import { API_BASE } from '../apiConfig';
 
 const ROL_BADGE = {
@@ -21,6 +21,67 @@ export const Kullanicilar = () => {
   const [seciliPerformans, setSeciliPerformans] = useState(null);
   // Silme modal state
   const [silOnay, setSilOnay] = useState(null);  // null | { personel, loading, hata }
+
+  // Performans Modalı için Tarih Filtreleme State'leri
+  const [modalPeriod, setModalPeriod] = useState('HEPSI');
+  const [modalStartDate, setModalStartDate] = useState('');
+  const [modalEndDate, setModalEndDate] = useState('');
+  const [modalStats, setModalStats] = useState(null);
+  const [modalLoading, setModalLoading] = useState(false);
+
+  useEffect(() => {
+    if (!seciliPerformans) {
+      setModalStats(null);
+      return;
+    }
+
+    const loadStats = async () => {
+      setModalLoading(true);
+      try {
+        let start = '';
+        let end = '';
+        const today = new Date().toISOString().split('T')[0];
+
+        if (modalPeriod === 'BUGUN') {
+          start = today;
+          end = today;
+        } else if (modalPeriod === 'HAFTA') {
+          const d = new Date();
+          d.setDate(d.getDate() - 7);
+          start = d.toISOString().split('T')[0];
+          end = today;
+        } else if (modalPeriod === 'AY') {
+          const d = new Date();
+          d.setMonth(d.getMonth() - 1);
+          start = d.toISOString().split('T')[0];
+          end = today;
+        } else if (modalPeriod === 'OZEL') {
+          start = modalStartDate;
+          end = modalEndDate;
+        }
+
+        let url = `${API_BASE}/personeller/istatistik`;
+        const queryParams = [];
+        if (start) queryParams.push(`start_date=${start}`);
+        if (end) queryParams.push(`end_date=${end}`);
+        if (queryParams.length > 0) {
+          url += `?${queryParams.join('&')}`;
+        }
+
+        const res = await fetch(url);
+        const data = await res.json();
+        // İlgili personelin verisini bul
+        const pStats = data.find(x => x.id === seciliPerformans.personel.id);
+        setModalStats(pStats || null);
+      } catch (err) {
+        console.error("Failed to load modal stats", err);
+      } finally {
+        setModalLoading(false);
+      }
+    };
+
+    loadStats();
+  }, [seciliPerformans, modalPeriod, modalStartDate, modalEndDate]);
 
   const personelleriGetir = async () => {
     try {
@@ -260,7 +321,12 @@ export const Kullanicilar = () => {
             <p>İşlem: {s?.islem_sayisi ?? 0} adet</p>
           </div>
           <button
-            onClick={() => setSeciliPerformans({ personel: p, stats: s })}
+            onClick={() => {
+              setModalPeriod('HEPSI');
+              setModalStartDate('');
+              setModalEndDate('');
+              setSeciliPerformans({ personel: p, stats: s });
+            }}
             className="mt-2 w-full rounded-lg bg-ink-800 text-white text-xs font-bold py-2 hover:bg-ink-900 transition-all"
           >
             Performansı Gör
@@ -273,41 +339,173 @@ export const Kullanicilar = () => {
 
       {seciliPerformans && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl p-6 transition-all duration-300">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display font-bold text-lg text-ink-900">
-                {seciliPerformans.personel.ad_soyad} · Performans Detayı
+                {seciliPerformans.personel.ad_soyad} · Performans Raporu
               </h3>
               <button onClick={() => setSeciliPerformans(null)} className="text-ink-400 hover:text-ink-700">
                 <X size={18} />
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-xl border border-ink-100 p-3">
-                <p className="text-xs text-ink-400">Toplam Alış (Has)</p>
-                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.toplam_alis_has ?? 0).toFixed(3)} gr</p>
-              </div>
-              <div className="rounded-xl border border-ink-100 p-3">
-                <p className="text-xs text-ink-400">Toplam Satış (Has)</p>
-                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.toplam_satis_has ?? 0).toFixed(3)} gr</p>
-              </div>
-              <div className="rounded-xl border border-ink-100 p-3">
-                <p className="text-xs text-ink-400">Net Has</p>
-                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.net_has ?? 0).toFixed(3)} gr</p>
-              </div>
-              <div className="rounded-xl border border-ink-100 p-3">
-                <p className="text-xs text-ink-400">Toplam TL Hacim</p>
-                <p className="font-mono font-black text-ink-900">{(seciliPerformans.stats?.toplam_tl_hacim ?? 0).toFixed(2)} TL</p>
-              </div>
-              <div className="rounded-xl border border-ink-100 p-3">
-                <p className="text-xs text-ink-400">İşlem Sayısı</p>
-                <p className="font-mono font-black text-ink-900">{seciliPerformans.stats?.islem_sayisi ?? 0}</p>
-              </div>
-              <div className="rounded-xl border border-gold-200 bg-gold-50 p-3">
-                <p className="text-xs text-gold-700">Performans Skoru</p>
-                <p className="font-mono font-black text-gold-900">{(seciliPerformans.stats?.performans_skor ?? 0).toFixed(1)} / 100</p>
-              </div>
+
+            {/* Dönem Filtre Butonları */}
+            <div className="flex items-center gap-1 p-1 bg-ink-50 rounded-xl mb-4 text-xs font-semibold overflow-x-auto">
+              {[
+                { id: 'HEPSI', label: 'Tüm Zamanlar' },
+                { id: 'BUGUN', label: 'Bugün' },
+                { id: 'HAFTA', label: '7 Gün' },
+                { id: 'AY',    label: '30 Gün' },
+                { id: 'OZEL',  label: 'Özel Tarih' }
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setModalPeriod(tab.id)}
+                  className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition-all ${
+                    modalPeriod === tab.id
+                      ? 'bg-white text-ink-900 shadow-sm border border-ink-100/50'
+                      : 'text-ink-500 hover:text-ink-800'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
+
+            {/* Özel Tarih Aralığı Girişleri */}
+            {modalPeriod === 'OZEL' && (
+              <div className="flex items-center gap-2 mb-4 bg-ink-50/50 p-3 rounded-xl border border-ink-100">
+                <div className="flex-1">
+                  <label className="block text-[10px] uppercase font-bold text-ink-400 mb-1">Başlangıç</label>
+                  <input
+                    type="date"
+                    value={modalStartDate}
+                    onChange={(e) => setModalStartDate(e.target.value)}
+                    className="w-full text-xs bg-white border border-ink-100 rounded-lg px-2.5 py-1.5 outline-none focus:border-gold-300"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-[10px] uppercase font-bold text-ink-400 mb-1">Bitiş</label>
+                  <input
+                    type="date"
+                    value={modalEndDate}
+                    onChange={(e) => setModalEndDate(e.target.value)}
+                    className="w-full text-xs bg-white border border-ink-100 rounded-lg px-2.5 py-1.5 outline-none focus:border-gold-300"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* İstatistikler */}
+            {modalLoading ? (
+              <div className="flex flex-col items-center justify-center py-12 text-ink-400 gap-2">
+                <RefreshCw className="animate-spin text-gold-500" size={24} />
+                <span className="text-xs font-semibold">Veriler hesaplanıyor...</span>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* 1. Üst Düzey Özet */}
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="rounded-xl border border-ink-100 p-3 bg-white shadow-sm">
+                    <p className="text-[10px] font-bold text-ink-400 uppercase">Toplam İşlem</p>
+                    <p className="font-mono font-black text-lg text-ink-900 mt-1">{modalStats?.islem_sayisi ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-ink-100 p-3 bg-white shadow-sm">
+                    <p className="text-[10px] font-bold text-ink-400 uppercase">Hacim (Has)</p>
+                    <p className="font-mono font-black text-lg text-ink-900 mt-1">
+                      {((modalStats?.toplam_alis_has ?? 0) + (modalStats?.toplam_satis_has ?? 0)).toFixed(3)} gr
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-gold-200 bg-gold-50/50 p-3 shadow-sm">
+                    <p className="text-[10px] font-bold text-gold-700 uppercase">Skor</p>
+                    <p className="font-mono font-black text-lg text-gold-900 mt-1">
+                      {(modalStats?.performans_skor ?? 0).toFixed(1)} / 100
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2. Alış vs Satış Detayları */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Alış Detayları */}
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50/20 p-4 space-y-2.5">
+                    <div className="flex items-center gap-1.5 text-emerald-800 font-bold text-xs uppercase">
+                      <TrendingUp size={14} />
+                      <span>Alış İstatistikleri</span>
+                    </div>
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex justify-between border-b border-emerald-100/50 pb-1">
+                        <span className="text-ink-500">Ödenen TL:</span>
+                        <span className="font-mono font-bold text-emerald-800">
+                          ₺{(modalStats?.toplam_alis_tl ?? 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-b border-emerald-100/50 pb-1">
+                        <span className="text-ink-500">Altın Alış:</span>
+                        <span className="font-mono font-bold text-ink-800">
+                          {(modalStats?.toplam_alis_altin_gr ?? 0).toFixed(2)} gr
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-b border-emerald-100/50 pb-1">
+                        <span className="text-ink-500">Sarrafiye Alış:</span>
+                        <span className="font-mono font-bold text-ink-800">
+                          {modalStats?.toplam_alis_sarrafiye_adet ?? 0} adet
+                        </span>
+                      </div>
+                      <div className="flex justify-between pt-0.5">
+                        <span className="text-ink-500">Has Altın Alış:</span>
+                        <span className="font-mono font-black text-emerald-800">
+                          {(modalStats?.toplam_alis_has ?? 0).toFixed(3)} gr
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Satış Detayları */}
+                  <div className="rounded-2xl border border-red-100 bg-red-50/20 p-4 space-y-2.5">
+                    <div className="flex items-center gap-1.5 text-red-800 font-bold text-xs uppercase">
+                      <TrendingDown size={14} />
+                      <span>Satış İstatistikleri</span>
+                    </div>
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex justify-between border-b border-red-100/50 pb-1">
+                        <span className="text-ink-500">Alınan TL (Ciro):</span>
+                        <span className="font-mono font-bold text-red-800">
+                          ₺{(modalStats?.toplam_satis_tl ?? 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-b border-red-100/50 pb-1">
+                        <span className="text-ink-500">Altın Satış:</span>
+                        <span className="font-mono font-bold text-ink-800">
+                          {(modalStats?.toplam_satis_altin_gr ?? 0).toFixed(2)} gr
+                        </span>
+                      </div>
+                      <div className="flex justify-between border-b border-red-100/50 pb-1">
+                        <span className="text-ink-500">Sarrafiye Satış:</span>
+                        <span className="font-mono font-bold text-ink-800">
+                          {modalStats?.toplam_satis_sarrafiye_adet ?? 0} adet
+                        </span>
+                      </div>
+                      <div className="flex justify-between pt-0.5">
+                        <span className="text-ink-500">Has Altın Satış:</span>
+                        <span className="font-mono font-black text-red-800">
+                          {(modalStats?.toplam_satis_has ?? 0).toFixed(3)} gr
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Dönem Sonu Kasa Farkı */}
+                <div className="rounded-xl border border-ink-100 bg-ink-50/20 p-3 flex items-center justify-between text-xs">
+                  <span className="font-bold text-ink-600">Dönem Sonu Kasa Farkı (Net Has):</span>
+                  <span className={`font-mono font-black text-sm ${
+                    (modalStats?.net_has ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-600'
+                  }`}>
+                    {(modalStats?.net_has ?? 0) >= 0 ? '+' : ''}{(modalStats?.net_has ?? 0).toFixed(3)} gr Has
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
