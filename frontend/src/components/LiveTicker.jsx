@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ArrowDownRight, ArrowRight, ArrowUpRight } from 'lucide-react';
-
-const API_BASE = 'http://localhost:8000';
+import { API_BASE } from '../apiConfig';
 
 const TrendIcon = ({ trend }) => {
   if (trend === 'up') return <ArrowUpRight size={14} className="text-emerald-500" />;

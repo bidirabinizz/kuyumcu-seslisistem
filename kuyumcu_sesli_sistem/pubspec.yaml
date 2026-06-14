@@ -30,18 +30,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # Arka planda çalışmak için (Android)
-  flutter_foreground_task: ^9.2.2
-  # Ses kaydı ve stream için
-  record: ^6.2.0
-  # Sunucu ile haberleşme
-  web_socket_channel: ^3.0.1
-  # İzin yönetimi
-  permission_handler: ^12.0.1
-  # Sunucudan gelen onay sesini çalmak için
-  audioplayers: ^6.0.0
   http: ^1.2.0
   shared_preferences: ^2.5.5
+  web_socket_channel: ^3.0.3
 
 dev_dependencies:
   flutter_test:

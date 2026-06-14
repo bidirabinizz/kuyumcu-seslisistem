@@ -1,11 +1,13 @@
-import { LayoutDashboard, Users, BarChart3, ShieldCheck, Mic, X, Settings2Icon } from 'lucide-react';
+import { LayoutDashboard, Users, BarChart3, ShieldCheck, Package, Monitor, Settings2Icon, X, ExternalLink, Building2 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 
 const menu = [
-  { icon: LayoutDashboard, label: 'Canlı İzleme',    path: '/' },
-  { icon: Users,           label: 'Personeller',  path: '/kullanicilar' },
-  { icon: BarChart3,       label: 'Raporlar',     path: '/raporlar' },
-  { icon: Settings2Icon, label: 'Ayarlar',  path: '/ayarlar'}
+  { icon: LayoutDashboard, label: 'Canlı İzleme',  path: '/' },
+  { icon: Building2,       label: 'Toptancılar',   path: '/toptancilar' },
+  { icon: Users,           label: 'Personeller',   path: '/kullanicilar' },
+  { icon: Package,         label: 'Ürünler',        path: '/urunler' },
+  { icon: BarChart3,       label: 'Raporlar',       path: '/raporlar' },
+  { icon: Settings2Icon,   label: 'Ayarlar',        path: '/ayarlar' },
 ];
 
 export const Sidebar = ({ closeMobileMenu, mobileOpen }) => {
@@ -46,20 +48,23 @@ export const Sidebar = ({ closeMobileMenu, mobileOpen }) => {
           </button>
         </div>
 
-        {/* Mic status */}
-        <div className="px-6 py-4 border-b border-white/5">
-          <div className="flex items-center gap-2.5 bg-white/5 rounded-xl px-3 py-2.5">
-            <div className="relative">
-              <Mic size={14} className="text-gold-400" />
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-            </div>
-            <span className="text-xs font-medium text-ink-300">Sesli Sistem Aktif</span>
-          </div>
+        {/* Kasa Ekranı hızlı erişim */}
+        <div className="px-3 py-2 border-b border-white/5">
+          <a
+            href="/kasa"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2.5 bg-amber-500/10 border border-amber-400/20 rounded-xl px-3 py-2.5 hover:bg-amber-500/20 transition-all group"
+          >
+            <Monitor size={14} className="text-amber-400" />
+            <span className="text-xs font-medium text-amber-300 flex-1">Kasa Ekranı</span>
+            <ExternalLink size={12} className="text-amber-500/50 group-hover:text-amber-400 transition-colors" />
+          </a>
         </div>
 
         {/* Nav */}
         <nav className="flex-1 py-4 px-3">
-          <p className="text-[10px] font-bold tracking-[0.15em] text-ink-500 uppercase px-3 mb-3">Menü</p>
+          <p className="text-[12px] font-bold tracking-[0.15em] text-ink-100 uppercase px-3 mb-3">Menü</p>
           {menu.map((item) => {
             const active = location.pathname === item.path;
             return (
@@ -72,7 +77,7 @@ export const Sidebar = ({ closeMobileMenu, mobileOpen }) => {
                   transition-all duration-150 group
                   ${active
                     ? 'nav-active-glow text-gold-400'
-                    : 'text-ink-400 hover:text-white hover:bg-white/5'
+                    : 'text-ink-100 hover:text-white hover:bg-white/5'
                   }
                 `}
               >

@@ -92,13 +92,13 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
   return (
     <>
       {/* Orijinal Tablo Tasarımı */}
-      <div className="bg-[#f8fafc] rounded-3xl border border-[#d4af37]/20 shadow-[0_10px_25px_rgba(0,0,0,0.05)] mt-4 overflow-hidden">
-        <div className="px-6 py-5 border-b border-ink-100 flex items-center justify-between bg-white">
+      <div className="bg-white rounded-none border premium-border premium-shadow mt-4 overflow-hidden">
+        <div className="px-6 py-5 border-b premium-border flex items-center justify-between bg-white">
           <div>
-            <h2 className="text-base font-bold text-ink-800">Son Hareketler</h2>
-            <p className="text-xs text-ink-400 mt-0.5">Sistemdeki tüm işlemler</p>
+            <h2 className="text-base font-bold text-ink-900">Son Hareketler</h2>
+            <p className="text-xs text-ink-500 mt-0.5">Sistemdeki tüm işlemler</p>
           </div>
-          <div className="flex items-center gap-2 text-xs font-medium text-ink-400 bg-ink-50 px-3 py-1.5 rounded-lg border border-ink-100">
+          <div className="flex items-center gap-2 text-xs font-medium text-ink-500 bg-ink-50 px-3 py-1.5 rounded-none border premium-border">
             <Mic size={12} />
             {islemler.length} işlem
           </div>
@@ -137,25 +137,25 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                   >
                     <td className="px-6 py-4">
                       <span className={`
-                        inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold tracking-wider uppercase
+                        inline-flex items-center gap-1.5 px-2.5 py-1 rounded-none text-[11px] font-bold tracking-wider uppercase border
                         ${islem.tip === 'SATIS'
-                          ? 'bg-red-50 text-red-600 border border-red-100'
-                          : 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                          ? 'bg-red-50 text-red-700 border-red-200'
+                          : 'bg-emerald-50 text-emerald-800 border-emerald-200'
                         }
                       `}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${islem.tip === 'SATIS' ? 'bg-red-500' : 'bg-emerald-500'}`} />
+                        <span className={`w-1.5 h-1.5 rounded-none ${islem.tip === 'SATIS' ? 'bg-red-600' : 'bg-emerald-600'}`} />
                         {islem.tip === 'SATIS' ? 'Satış' : 'Alış'}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${AYAR_COLOR[islem.ayar] || 'bg-ink-100 text-ink-600'}`}>
+                      <span className={`px-2 py-0.5 rounded-none border border-ink-100 text-[11px] font-bold ${AYAR_COLOR[islem.ayar] || 'bg-ink-50 text-ink-700'}`}>
                         {AYAR_LABEL[islem.ayar] || islem.ayar}
                       </span>
                     </td>
                     {/* Miktar — birime göre dinamik */}
                     <td className="px-6 py-4">
-                      <span className="font-mono font-bold text-ink-800 text-sm">{islem.miktar}</span>
-                      <span className="text-xs text-ink-400 ml-1">
+                      <span className="font-mono font-bold text-ink-900 text-sm">{islem.miktar}</span>
+                      <span className="text-xs text-ink-500 ml-1">
                         {islem.birim === 'ADET' ? 'Adet' : 'gr'}
                       </span>
                     </td>
@@ -163,16 +163,16 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                       <span className="font-mono font-black text-ink-900 text-sm">
                         {islem.has > 0 ? Number(islem.has).toFixed(3) : '—'}
                       </span>
-                      {islem.has > 0 && <span className="text-xs text-ink-400 ml-1">gr has</span>}
+                      {islem.has > 0 && <span className="text-xs text-ink-500 ml-1">gr has</span>}
                     </td>
                     {/* Ödeme tipi rozeti */}
                     <td className="px-6 py-4">
                       {islem.odeme_tipi === 'KART' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
                           💳 Kart
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                           💵 Nakit
                         </span>
                       )}
@@ -182,23 +182,22 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                     </td>
                     <td className="px-6 py-4 text-right space-x-1">
                       {/* DÜZENLE BUTONU */}
-                      
-<button
-  onClick={() => setEditModal({ isOpen: true, islem: islem })}
-  className="p-2 text-slate-700 opacity-40 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all group-hover:opacity-100"
-  title="İşlemi Düzenle"
->
-  <Edit2 size={16} />
-</button>
+                      <button
+                        onClick={() => setEditModal({ isOpen: true, islem: islem })}
+                        className="p-2 text-ink-500 opacity-40 hover:text-ink-900 hover:bg-ink-50 border border-transparent hover:border-ink-200 rounded-none transition-all group-hover:opacity-100"
+                        title="İşlemi Düzenle"
+                      >
+                        <Edit2 size={16} />
+                      </button>
 
-{/* SİL BUTONU (İkonunu mevcut RotateCcw olarak bıraktım) */}
-<button
-  onClick={() => setDeleteModal({ isOpen: true, islem: islem })}
-  className="p-2 text-slate-700 opacity-40 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all group-hover:opacity-100"
-  title="İşlemi Geri Al / Sil"
->
-  <RotateCcw size={16} />
-</button>
+                      {/* SİL BUTONU */}
+                      <button
+                        onClick={() => setDeleteModal({ isOpen: true, islem: islem })}
+                        className="p-2 text-ink-500 opacity-40 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-none transition-all group-hover:opacity-100"
+                        title="İşlemi Geri Al / Sil"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -221,9 +220,9 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
             </div>
             
             <div className="p-6 bg-slate-50">
-              <div className="bg-white p-3 rounded-lg border border-slate-200 text-center mb-6 shadow-sm">
+              <div className="bg-white p-3 rounded-none border border-slate-200 text-center mb-6 shadow-sm">
                 <span className="block font-mono font-bold text-slate-800">
-                  {deleteModal.islem?.miktar} gr {AYAR_LABEL[deleteModal.islem?.ayar]} {deleteModal.islem?.tip === 'ALIS' ? 'Alış' : 'Satış'}
+                  {deleteModal.islem?.miktar} {deleteModal.islem?.birim === 'ADET' ? 'Adet' : 'gr'} {AYAR_LABEL[deleteModal.islem?.ayar]} {deleteModal.islem?.tip === 'ALIS' ? 'Alış' : 'Satış'}
                 </span>
                 {deleteModal.islem?.personel_ad_soyad && (
                   <span className="block text-xs text-slate-500 mt-1">{deleteModal.islem?.personel_ad_soyad}</span>

@@ -4,11 +4,11 @@
 @tailwind utilities;
 
 :root {
-  --gold: #F59E0B;
-  --gold-light: #FCD34D;
-  --ink-900: #0E0D0B;
-  --ink-800: #1A1814;
-  --ink-700: #2A2722;
+  --gold: #D4AF37; /* Lüks mat altın */
+  --gold-light: #E5C365;
+  --ink-900: #111111;
+  --ink-800: #1C1C1E;
+  --ink-700: #2C2C2E;
 }
 
 * { box-sizing: border-box; }
@@ -26,32 +26,13 @@ body {
 ::-webkit-scrollbar-thumb { background: #D5D2CC; border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: #B0ACA4; }
 
-/* Gold shimmer effect on cards */
-.gold-shimmer {
-  background: linear-gradient(
-    105deg,
-    #1A1814 0%,
-    #2A2722 25%,
-    #3D3933 45%,
-    #92400E 55%,
-    #D97706 60%,
-    #F59E0B 65%,
-    #D97706 70%,
-    #3D3933 80%,
-    #2A2722 90%,
-    #1A1814 100%
-  );
-  background-size: 200% auto;
+/* Keskin ve resmi gölgeler */
+.premium-border {
+  border: 1px solid #EBEBEB;
 }
 
-.animate-shimmer-bg {
-  animation: shimmer 3s linear infinite;
-  background-size: 200% auto;
-}
-
-@keyframes shimmer {
-  0%   { background-position: -200% center; }
-  100% { background-position:  200% center; }
+.premium-shadow {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
 }
 
 /* Table row enter animation */
@@ -73,23 +54,44 @@ body {
   animation: ticker 30s linear infinite;
 }
 
-/* Sidebar active glow */
+/* Sidebar active indicator (Square) */
 .nav-active-glow {
-  box-shadow: inset 4px 0 0 #F59E0B;
-  background: linear-gradient(90deg, rgba(245,158,11,0.08) 0%, transparent 100%);
+  background-color: #FDFBF7;
+  border-left: 3px solid var(--gold);
 }
 
-/* Stat card hover */
+/* Stat card hover (Resmi) */
 .stat-card {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  border: 1px solid #EAEAEA;
+  border-radius: 0; /* Köşeli tasarım */
 }
 .stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 40px rgba(0,0,0,0.08);
+  border-color: var(--gold);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.04);
 }
 
 /* Toast bildirim animasyonu */
 @keyframes toastIn {
   from { opacity: 0; transform: translateY(12px) scale(0.96); }
   to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+/* Custom animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes scaleUp {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.animate-scaleUp {
+  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

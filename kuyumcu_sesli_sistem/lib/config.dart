@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 
@@ -9,7 +10,7 @@ class AppConfig {
   static const int _port = 8000;
 
   static String get apiBase => "http://$_host:$_port";
-  static String get wsBase => "ws://$_host:$_port/ws/audio";
+  static String get wsBase => "ws://$_host:$_port/ws";
   static String get currentHost => _host;
 
   // IP'yi kaydetmek için
@@ -25,9 +26,16 @@ class AppConfig {
     _host = prefs.getString('server_ip') ?? _host;
   }
 
-  // Backend'den otomatik IP çek — ÖNce UDP broadcast, sonra HTTP fallback
+  // Backend'den otomatik IP çek — Önce UDP broadcast (Web hariç), sonra HTTP fallback
   static Future<String?> otomatikIpBul() async {
-    // ── 1. UDP Broadcast (En hızlı yol) ──────────────────────────────────────
+    // ── 0. Web (Chrome) Test Ortamı ──────────────────────────────────────────
+    // Web tarayıcılarında UDP engellidir ve genelde aynı makinede test edilir.
+    if (kIsWeb) {
+      await setHost('127.0.0.1');
+      return '127.0.0.1';
+    }
+
+    // ── 1. UDP Broadcast (En hızlı yol, Web'de desteklenmez) ─────────────────
     final udpIp = await _udpDiscover();
     if (udpIp != null) {
       await setHost(udpIp);
@@ -99,7 +107,9 @@ class AppConfig {
           if (dg != null) {
             final msg = String.fromCharCodes(dg.data);
             if (msg.startsWith(ackPrefix)) {
-              final ip = msg.substring(ackPrefix.length).trim();
+              // Sunucunun kendi bildirdiği IP yanlış olabilir (örn. Hyper-V/VM ip'si).
+              // Bunun yerine doğrudan paketin geldiği asıl ağ IP'sini (source IP) kullanıyoruz.
+              final ip = dg.address.address;
               if (!completer.isCompleted) {
                 timer.cancel();
                 completer.complete(ip);

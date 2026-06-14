@@ -3,5 +3,5 @@ export const getServerIP = () => {
     return localStorage.getItem('server_ip') || window.location.hostname;
 };
 
-export const API_BASE = `http://${getServerIP()}:8000`;
-export const WS_BASE = `ws://${getServerIP()}:8000/ws`;
+export const API_BASE = import.meta.env.VITE_API_URL || `http://${getServerIP()}:8000`;
+export const WS_BASE = import.meta.env.VITE_WS_URL || `ws://${getServerIP()}:8000/ws`;

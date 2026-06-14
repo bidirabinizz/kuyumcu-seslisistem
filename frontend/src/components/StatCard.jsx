@@ -8,13 +8,13 @@ export const StatCard = ({ label, value, unit, sub, icon: Icon, color = 'gold', 
   const c = colors[color];
 
   return (
-    <div className={`stat-card ${c.bg} border ${c.border} rounded-2xl p-5`}>
+    <div className="bg-white p-5 border premium-border rounded-none premium-shadow stat-card group cursor-default relative overflow-hidden flex flex-col justify-between h-full">
       <div className="flex items-start justify-between mb-4">
-        <div className={`w-10 h-10 rounded-xl ${c.icon} flex items-center justify-center`}>
+        <div className={`w-10 h-10 rounded-none ${c.icon} flex items-center justify-center`}>
           <Icon size={18} />
         </div>
         {trend !== undefined && (
-          <span className={`text-xs font-bold px-2 py-0.5 rounded-lg ${trend >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+          <span className={`text-xs font-bold px-2 py-0.5 rounded-none ${trend >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
             {trend >= 0 ? '+' : ''}{trend}%
           </span>
         )}

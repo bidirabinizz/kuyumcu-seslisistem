@@ -14,11 +14,11 @@ export const FilterBar = ({ onExport, filters, onChange }) => {
   }, []);
 
   return (
-    <div className="bg-[#f8fafc] border border-[#d4af37]/20 rounded-3xl px-5 py-4 flex flex-wrap gap-3 items-center justify-between shadow-sm">
+    <div className="bg-white border premium-border rounded-none px-5 py-4 flex flex-wrap gap-3 items-center justify-between premium-shadow">
       <div className="flex flex-wrap gap-3 items-center">
         
         {/* Canlı Personel Filtresi */}
-        <div className="relative flex items-center gap-2 bg-[#f8fafc] border border-[#d4af37]/20 px-4 py-2.5 rounded-xl hover:border-[#d4af37]/30 transition-colors">
+        <div className="relative flex items-center gap-2 bg-ink-50 border premium-border px-4 py-2.5 rounded-none hover:border-gold-500 transition-colors">
           <Filter size={13} className="text-ink-400" />
           <select
             className="bg-transparent border-none text-sm font-semibold outline-none text-black pr-5 appearance-none cursor-pointer"
@@ -36,7 +36,7 @@ export const FilterBar = ({ onExport, filters, onChange }) => {
         </div>
 
         {/* İşlem Tipi Filtresi */}
-        <div className="relative flex items-center gap-2 bg-[#f8fafc] border border-[#d4af37]/20 px-4 py-2.5 rounded-xl hover:border-[#d4af37]/30 transition-colors">
+        <div className="relative flex items-center gap-2 bg-ink-50 border premium-border px-4 py-2.5 rounded-none hover:border-gold-500 transition-colors">
           <select
             className="bg-transparent border-none text-sm font-semibold outline-none text-black pr-5 appearance-none cursor-pointer"
             value={filters?.tip || ''}
@@ -50,7 +50,7 @@ export const FilterBar = ({ onExport, filters, onChange }) => {
         </div>
 
         {/* Tarih Filtresi */}
-        <div className="flex items-center gap-2 bg-ink-50 px-4 py-2.5 rounded-xl border border-ink-100 hover:border-ink-200 transition-colors">
+        <div className="flex items-center gap-2 bg-ink-50 px-4 py-2.5 rounded-none border premium-border hover:border-gold-500 transition-colors">
           <CalendarDays size={13} className="text-ink-400" />
           <input
             type="date"
@@ -64,7 +64,7 @@ export const FilterBar = ({ onExport, filters, onChange }) => {
       {/* PDF Export Butonu */}
       <button
         onClick={onExport}
-        className="flex items-center gap-2 bg-gray-800 hover:bg-gray-900 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-all shadow-md shadow-ink-900/20 active:scale-95"
+        className="flex items-center gap-2 bg-ink-900 hover:bg-ink-800 text-white px-5 py-2.5 rounded-none font-bold text-sm transition-all premium-shadow active:scale-95"
       >
         <Download size={15} className="text-gold-500" />
         PDF Rapor Al

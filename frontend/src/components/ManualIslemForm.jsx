@@ -15,6 +15,7 @@ export const ManualIslemForm = () => {
   const [loading, setLoading]     = useState(false);
   const [personeller, setPersoneller] = useState([]);
   const [basariMesaji, setBasariMesaji] = useState('');
+  const [kurlar, setKurlar] = useState(null);
 
   const [formData, setFormData] = useState({
     personel_id:     '',
@@ -26,11 +27,14 @@ export const ManualIslemForm = () => {
     odeme_tipi:      'NAKIT',
   });
 
-  // Personel listesi
+  // Personel listesi ve kurlar
   useEffect(() => {
     axios.get(`${API_BASE}/personeller`)
       .then(res => setPersoneller(res.data))
       .catch(err => console.error('Personel listesi alınamadı:', err));
+    axios.get(`${API_BASE}/piyasa/kurlar`)
+      .then(res => setKurlar(res.data))
+      .catch(err => console.error('Kurlar alınamadı:', err));
   }, []);
 
   // Kategoriye göre ürün seçenekleri
@@ -77,13 +81,30 @@ export const ManualIslemForm = () => {
     setLoading(true);
     setBasariMesaji('');
     try {
+      const typedFiyat = parseFloat(formData.birim_fiyat || 0);
+      let birimFiyatTL = typedFiyat;
+      let dovizTutar = 0.0;
+      let dovizKuru = 1.0;
+
+      if (formData.odeme_tipi === 'USD') {
+        dovizKuru = kurlar?.usd_try || 1.0;
+        dovizTutar = typedFiyat;
+        birimFiyatTL = typedFiyat * dovizKuru;
+      } else if (formData.odeme_tipi === 'EUR') {
+        dovizKuru = kurlar?.eur_try || 1.0;
+        dovizTutar = typedFiyat;
+        birimFiyatTL = typedFiyat * dovizKuru;
+      }
+
       const payload = {
         ...formData,
         personel_id: parseInt(formData.personel_id),
         brut_miktar: parseFloat(formData.brut_miktar),
-        birim_fiyat: parseFloat(formData.birim_fiyat || 0),
+        birim_fiyat: Math.round(birimFiyatTL * 100) / 100, // DB expects total TL value in birim_fiyat
         islem_birimi: formData.urun_kategorisi === 'ALTIN' ? 'GRAM' : 'ADET',
         adet: formData.urun_kategorisi !== 'ALTIN' ? parseInt(formData.brut_miktar) : 1,
+        doviz_tutar: Math.round(dovizTutar * 100) / 100,
+        doviz_kuru: dovizKuru,
       };
 
       await axios.post(`${API_BASE}/islemler`, payload);
@@ -195,41 +216,69 @@ export const ManualIslemForm = () => {
         {/* Fiyat */}
         <div>
           <label className="flex items-center gap-2 text-sm font-medium text-slate-600 mb-1">
-            <Wallet size={14} /> Toplam Fiyat (TL)
+            <Wallet size={14} /> Toplam Fiyat ({formData.odeme_tipi === 'USD' ? 'USD $' : formData.odeme_tipi === 'EUR' ? 'EUR €' : 'TL ₺'})
           </label>
           <input
-            type="number" step="1" placeholder="0"
+            type="number" step="0.01" placeholder="0"
             className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-gold-400 outline-none"
             value={formData.birim_fiyat}
             onChange={e => handleChange('birim_fiyat', e.target.value)}
           />
+          {formData.birim_fiyat && (formData.odeme_tipi === 'USD' || formData.odeme_tipi === 'EUR') && (
+            <p className="text-[11px] text-slate-500 font-semibold mt-1">
+              ≈ {((parseFloat(formData.birim_fiyat) || 0) * (formData.odeme_tipi === 'USD' ? (kurlar?.usd_try || 1.0) : (kurlar?.eur_try || 1.0))).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL{' '}
+              (Kur: {formData.odeme_tipi === 'USD' ? kurlar?.usd_try : kurlar?.eur_try})
+            </p>
+          )}
         </div>
 
         {/* Ödeme Tipi Seçici */}
         <div>
           <label className="text-sm font-medium text-slate-600 mb-2 block">Ödeme Tipi</label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <button
               type="button"
               onClick={() => handleChange('odeme_tipi', 'NAKIT')}
-              className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-bold transition-all ${
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg border text-xs font-bold transition-all ${
                 formData.odeme_tipi === 'NAKIT'
                   ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
                   : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300'
               }`}
             >
-              <Banknote size={15} /> Nakit
+              <Banknote size={13} /> Nakit
             </button>
             <button
               type="button"
               onClick={() => handleChange('odeme_tipi', 'KART')}
-              className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-bold transition-all ${
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg border text-xs font-bold transition-all ${
                 formData.odeme_tipi === 'KART'
                   ? 'bg-blue-50 border-blue-300 text-blue-700'
                   : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300'
               }`}
             >
-              <CreditCard size={15} /> Kart
+              <CreditCard size={13} /> Kart
+            </button>
+            <button
+              type="button"
+              onClick={() => handleChange('odeme_tipi', 'USD')}
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg border text-xs font-bold transition-all ${
+                formData.odeme_tipi === 'USD'
+                  ? 'bg-amber-50 border-amber-300 text-amber-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300'
+              }`}
+            >
+              <Banknote size={13} /> USD ($)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleChange('odeme_tipi', 'EUR')}
+              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-lg border text-xs font-bold transition-all ${
+                formData.odeme_tipi === 'EUR'
+                  ? 'bg-purple-50 border-purple-300 text-purple-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-slate-300'
+              }`}
+            >
+              <Banknote size={13} /> EUR (€)
             </button>
           </div>
         </div>

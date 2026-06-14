@@ -1,34 +1,19 @@
 import asyncio
 import json
 import os
-import queue
-import re
 import threading
-import time
-import urllib.request
-import warnings
-import platform
 import traceback
-import numpy as np
-import edge_tts
-if platform.system() == "Windows":
-    import winsound
-import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from fpdf import FPDF
 from fastapi.responses import FileResponse
 import psycopg2
-import sounddevice as sd
-import speech_recognition as sr
-import whisper
-import pyttsx3
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from vosk import KaldiRecognizer, Model
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import socket
-
-warnings.filterwarnings("ignore", category=UserWarning)
+import time
+import urllib.request
+import xml.etree.ElementTree as ET
 
 # ─────────────────────────────────────────────
 # AYARLAR
@@ -83,63 +68,6 @@ SARRAFIYE_CINSI_MAP = {
     for cfg in SARRAFIYE_CONFIG.values()
 }
 
-# Pırlanta tanıyıcı kelimeler
-PIRLANTA_KELIMELER = ["pırlanta", "elmas", "tektaş", "beştaş"]
-
-SAYILAR = {
-    "sıfır": 0,   "bir": 1,    "iki": 2,    "üç": 3,    "dört": 4,
-    "beş": 5,     "altı": 6,   "yedi": 7,   "sekiz": 8, "dokuz": 9,
-    "on": 10,     "yirmi": 20, "otuz": 30,  "kırk": 40, "elli": 50,
-    "altmış": 60, "yetmiş": 70,"seksen": 80,"doksan": 90,"yüz": 100,
-    "bin": 1000, "onbin":10000, "yüzbin":100000, "milyon": 1000000,
-    "buçuk": 0.5,
-}
-
-WHISPER_PROMPT = (
-    "alış satış gram ayar yirmi iki on dört yirmi dört on sekiz buçuk "
-    "has miktar fiyat lira kaydet evet hayır tamam iptal sil geri al"
-)
-COOLDOWN_SANIYE = 3
-TEMP_WAV        = "temp_islem.wav"
-
-# ─────────────────────────────────────────────
-# GLOBAL MODEL DEĞİŞKENLERİ
-# Bu modeller lifespan'de yüklenir, her yerden erişilebilir
-# ─────────────────────────────────────────────
-vosk_model: Model | None = None
-whisper_model = None
-# Her WebSocket bağlantısı kendi Recognizer'ını oluşturur (thread-safe değil)
-# Bu yüzden global tek recognizer yerine per-connection yaklaşım kullanıyoruz
-
-# ─────────────────────────────────────────────
-# WEBSOCKET YÖNETİCİSİ
-# ─────────────────────────────────────────────
-async def tts_ve_gonder(personel_id: int, metin: str):
-    try:
-        communicate = edge_tts.Communicate(metin, "tr-TR-AhmetNeural")
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-        
-        # 1. Önce Flutter'a süreyi bildir (milisaniye cinsinden)
-        # MP3 bitrate tahmini: edge_tts çıktısı ~32kbps
-        estimated_ms = max(1500, int(len(audio_data) / 4000))
-        await manager.send_text(personel_id, f"TTS_START:{estimated_ms}")
-        
-        # Kısa bekle ki Flutter mesajı işlesin
-        await asyncio.sleep(0.05)
-        
-        # 2. Sonra sesi gönder
-        await manager.send_audio(personel_id, audio_data)
-        
-        print(f"🔊 Personel {personel_id} → ses gönderildi (~{estimated_ms}ms)")
-    except Exception as e:
-        print(f"⚠️ TTS Hatası: {e}")
-        await manager.send_text(personel_id, f"MESAJ: {metin}")
-
-
-
 def get_local_ip():
     """Bilgisayarın dükkan ağındaki yerel IPv4 adresini bulur."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -153,39 +81,9 @@ def get_local_ip():
         s.close()
     return ip
 
-
-
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[int, WebSocket] = {}
-
-    async def connect(self, websocket: WebSocket, p_id: int):
-        await websocket.accept()
-        self.active_connections[p_id] = websocket
-        print(f"✅ Personel {p_id} bağlandı (Cihaz: {websocket.client})")
-
-    def disconnect(self, p_id: int):
-        if p_id in self.active_connections:
-            del self.active_connections[p_id]
-            print(f"❌ Personel {p_id} ayrıldı.")
-
-    async def send_audio(self, p_id: int, audio_bytes: bytes):
-        """Sadece ilgili personelin kulaklığına ses gönderir."""
-        ws = self.active_connections.get(p_id)
-        if ws:
-            try:
-                await ws.send_bytes(audio_bytes)
-            except Exception as e:
-                print(f"[UYARI] Personel {p_id} ses gönderilemedi: {e}")
-
-    async def send_text(self, p_id: int, message: str):
-        """Belirli bir personele metin gönderir (durum bildirimi)."""
-        ws = self.active_connections.get(p_id)
-        if ws:
-            try:
-                await ws.send_text(message)
-            except Exception as e:
-                print(f"[UYARI] Personel {p_id} metin gönderilemedi: {e}")
 
     async def broadcast_text(self, message: str):
         """Tüm bağlı istemcilere metin yayınlar."""
@@ -195,11 +93,9 @@ class ConnectionManager:
             except Exception:
                 pass
 
-
 manager = ConnectionManager()
+
 _main_loop: asyncio.AbstractEventLoop | None = None
-_wake_words_map: dict[str, int] = {}
-_wake_words_lock = threading.Lock()
 _schema_lock = threading.Lock()
 _personeller_schema_checked = False
 _market_cache_lock = threading.Lock()
@@ -207,8 +103,6 @@ _market_cache_data: dict | None = None
 _market_cache_prev_data: dict | None = None
 _market_cache_ts = 0.0
 _MARKET_CACHE_TTL = 300
-_tts_lock = threading.Lock()
-_tts_engine = None
 
 # ─────────────────────────────────────────────
 # ─────────────────────────────────────────────
@@ -247,25 +141,15 @@ def _udp_broadcast_listener():
 # ─────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _main_loop, vosk_model, whisper_model
+    global _main_loop
 
     _main_loop = asyncio.get_running_loop()
 
-    # Modelleri burada yükle — artık global, her yerden erişilebilir
-    print("[AI] Modeller yükleniyor...")
     try:
-        vosk_model = Model("model")
-        from faster_whisper import WhisperModel
-        whisper_model = WhisperModel("medium", device="cpu", compute_type="int8")
-        print("[AI] Modeller yüklendi.")
+        db_tablolari_hazirla()
+        print("[DB] Tablolar başarıyla hazırlandı (urunler, toptancilar vb).")
     except Exception as e:
-        print(f"[UYARI] Model yüklenemedi: {e}")
-
-    try:
-        personel_tetikleme_haritasi_yenile()
-        print(f"[AI] Wake word havuzu yüklendi: {list(aktif_tetikleme_haritasi().keys())}")
-    except Exception as e:
-        print(f"[UYARI] Personel wake word havuzu yüklenemedi: {e}")
+        print(f"[UYARI] Tablolar hazırlanamadı: {e}")
 
     # UDP keşif servisi — daemon thread olarak başlat
     _udp_stop_event.clear()
@@ -351,8 +235,55 @@ class IslemPayload(BaseModel):
     birim_fiyat: float   # İşlemin yapıldığı TL fiyatı
     urun_kategorisi: str = "ALTIN"
     islem_birimi: str = "GRAM"
-    odeme_tipi: str = "NAKIT"   # "NAKIT" veya "KART"
+    odeme_tipi: str = "NAKIT"   # "NAKIT", "KART", "USD", "EUR"
     adet: int = 1               # Sarrafiye ve pırlanta için adet
+    # Dinamik ürünler için override alanları (urunler tablosundan gelir)
+    milyem_override: float | None = None
+    has_karsiligi_override: float | None = None
+    urun_adi: str | None = None   # Görüntüleme için ürün adı
+    doviz_tutar: float = 0.0      # Döviz tutarı (USD/EUR ise)
+    doviz_kuru: float = 1.0       # Döviz kuru
+
+
+class UrunPayload(BaseModel):
+    ad: str
+    urun_cinsi: str
+    urun_kategorisi: str   # "ALTIN" | "SARRAFIYE" | "PIRLANTA"
+    islem_birimi: str = "GRAM"
+    milyem: float = 0.0
+    has_karsiligi: float = 0.0
+    renk: str = "amber"    # UI renk ipucu: amber | yellow | orange | red | purple | blue
+    sira: int = 0
+    aktif: bool = True
+    urun_grubu: str | None = "Diğer"
+
+
+class KategoriPayload(BaseModel):
+    ad: str          # Örn: "BEYAZ_ALTIN"
+    etiket: str      # Görüntüleme adı: "✨ Beyaz Altın"
+    renk: str = "gray"
+    sira: int = 0
+    aktif: bool = True
+
+class KategoriGuncellePayload(BaseModel):
+    ad: str | None = None
+    etiket: str | None = None
+    renk: str | None = None
+    sira: int | None = None
+    aktif: bool | None = None
+
+
+class UrunGuncellePayload(BaseModel):
+    ad: str | None = None
+    urun_cinsi: str | None = None
+    urun_kategorisi: str | None = None
+    islem_birimi: str | None = None
+    milyem: float | None = None
+    has_karsiligi: float | None = None
+    renk: str | None = None
+    sira: int | None = None
+    aktif: bool | None = None
+    urun_grubu: str | None = None
 
 
 def normalize_tetikleme_kelimesi(kelime: str) -> str:
@@ -380,537 +311,161 @@ def personeller_tablosunu_dogrula(conn):
         _personeller_schema_checked = True
 
 
-def personel_tetikleme_haritasi_yenile():
+# ─────────────────────────────────────────────
+# ÜRÜNLER TABLOSU — Otomatik Oluşturma & Seed
+# ─────────────────────────────────────────────
+def db_tablolari_hazirla():
+    """Tüm gerekli DB tablolarını oluşturur (yoksa) ve varsayılan ürünleri ekler."""
     conn = cursor = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
-        personeller_tablosunu_dogrula(conn)
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, tetikleme_kelimesi FROM personeller
-            WHERE tetikleme_kelimesi IS NOT NULL AND trim(tetikleme_kelimesi) <> ''
-            """
-        )
-        yeni_harita: dict[str, int] = {}
-        for personel_id, tetikleme in cursor.fetchall():
-            kelime = normalize_tetikleme_kelimesi(tetikleme)
-            if kelime:
-                yeni_harita[kelime] = personel_id
-        with _wake_words_lock:
-            _wake_words_map.clear()
-            _wake_words_map.update(yeni_harita)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS urunler (
+                id              SERIAL PRIMARY KEY,
+                ad              VARCHAR(100) NOT NULL,
+                urun_cinsi      VARCHAR(50)  NOT NULL,
+                urun_kategorisi VARCHAR(20)  NOT NULL,
+                islem_birimi    VARCHAR(10)  DEFAULT 'GRAM',
+                milyem          NUMERIC(8,4) DEFAULT 0,
+                has_karsiligi   NUMERIC(8,4) DEFAULT 0,
+                renk            VARCHAR(20)  DEFAULT 'amber',
+                sira            INTEGER      DEFAULT 0,
+                aktif           BOOLEAN      DEFAULT TRUE,
+                created_at      TIMESTAMP    DEFAULT NOW()
+            )
+        """)
+        cursor.execute("""
+            ALTER TABLE urunler ADD COLUMN IF NOT EXISTS urun_grubu VARCHAR(100) DEFAULT 'Diğer';
+        """)
+        # Günlük kurlar tablosu
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS gunluk_kurlar (
+                id                  SERIAL PRIMARY KEY,
+                usd_try             NUMERIC(10,4) NOT NULL,
+                eur_try             NUMERIC(10,4) NOT NULL,
+                gram_altin_24k_try  NUMERIC(10,2) NOT NULL,
+                guncellenme_tarihi  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        # islemler tablosuna döviz kolonları ekle (yoksa)
+        cursor.execute("""
+            ALTER TABLE islemler ADD COLUMN IF NOT EXISTS doviz_tutar NUMERIC(15,2) DEFAULT 0;
+        """)
+        cursor.execute("""
+            ALTER TABLE islemler ADD COLUMN IF NOT EXISTS doviz_kuru NUMERIC(10,4) DEFAULT 1;
+        """)
+        # Kategoriler tablosunu oluştur
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kategoriler (
+                id      SERIAL PRIMARY KEY,
+                ad      VARCHAR(100) NOT NULL UNIQUE,
+                etiket  VARCHAR(100) NOT NULL,
+                renk    VARCHAR(30)  DEFAULT 'amber',
+                sira    INTEGER      DEFAULT 0,
+                aktif   BOOLEAN      DEFAULT TRUE
+            )
+        """)
+        # Kategoriler tablosunu varsayılan değerlerle seed et (yoksa)
+        cursor.execute("SELECT COUNT(*) FROM kategoriler")
+        kat_count = cursor.fetchone()[0]
+        if kat_count == 0:
+            varsayilan_kategoriler = [
+                ('ALTIN',    '🥇 Altın',    'yellow', 1),
+                ('SARRAFIYE','🪙 Sarrafiye', 'amber',  2),
+                ('PIRLANTA', '💎 Pırlanta', 'purple', 3),
+            ]
+            cursor.executemany(
+                "INSERT INTO kategoriler (ad, etiket, renk, sira) VALUES (%s, %s, %s, %s)",
+                varsayilan_kategoriler
+            )
+            print(f"[DB] {len(varsayilan_kategoriler)} varsayılan kategori eklendi.")
+        # urunler tablosunda urun_kategorisi kolonu VARCHAR(100) genişlet
+        cursor.execute("""
+            ALTER TABLE urunler 
+            ALTER COLUMN urun_kategorisi TYPE VARCHAR(100);
+        """)
+
+        # Toptancılar Tablosu
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS toptancilar (
+                id                 SERIAL PRIMARY KEY,
+                unvan              VARCHAR(200) NOT NULL,
+                telefon            VARCHAR(50),
+                aciklama           TEXT,
+                olusturulma_tarihi TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        # Toptancı İşlemler Tablosu
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS toptanci_islemler (
+                id                 SERIAL PRIMARY KEY,
+                toptanci_id        INTEGER NOT NULL REFERENCES toptancilar(id) ON DELETE CASCADE,
+                islem_tipi         VARCHAR(50) NOT NULL, -- Örn: 'Borçlanma', 'Ödeme'
+                islem_detayi       VARCHAR(100),         -- Örn: 'Nakit Ödeme', 'Hurda Teslimi', 'Has Altın Teslimi', 'Mal Alış'
+                has_altin          NUMERIC(15,4) DEFAULT 0, -- Pozitif veya Negatif değer
+                tl_tutar           NUMERIC(15,2) DEFAULT 0, -- Pozitif veya Negatif değer
+                aciklama           TEXT,
+                islem_tarihi       TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        cursor.execute("SELECT COUNT(*) FROM urunler")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            # Varsayılan ürünleri seed et (mevcut hardcode'larla birebir uyumlu)
+            varsayilan = [
+                ("24 Ayar Has",   "24_AYAR",      "ALTIN",     "GRAM", 1.0000, 0.0,    "yellow", 1),
+                ("22 Ayar",       "22_AYAR",      "ALTIN",     "GRAM", 0.9160, 0.0,    "amber",  2),
+                ("18 Ayar",       "18_AYAR",      "ALTIN",     "GRAM", 0.7500, 0.0,    "orange", 3),
+                ("14 Ayar",       "14_AYAR",      "ALTIN",     "GRAM", 0.5850, 0.0,    "red",    4),
+                ("Çeyrek Altın",  "CEYREK_ALTIN", "SARRAFIYE", "ADET", 0.0,    1.6030, "amber",  5),
+                ("Yarım Altın",   "YARIM_ALTIN",  "SARRAFIYE", "ADET", 0.0,    3.2060, "amber",  6),
+                ("Tam Altın",     "TAM_ALTIN",    "SARRAFIYE", "ADET", 0.0,    6.4120, "amber",  7),
+                ("Ata Altın",     "ATA_ALTIN",    "SARRAFIYE", "ADET", 0.0,    6.5952, "amber",  8),
+                ("Pırlanta",      "PIRLANTA",     "PIRLANTA",  "ADET", 0.0,    0.0,    "purple", 9),
+            ]
+            cursor.executemany(
+                """INSERT INTO urunler
+                   (ad, urun_cinsi, urun_kategorisi, islem_birimi, milyem, has_karsiligi, renk, sira)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                varsayilan
+            )
+            print(f"[DB] {len(varsayilan)} varsayılan ürün eklendi.")
+        conn.commit()
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
 
-
-def aktif_tetikleme_haritasi():
-    with _wake_words_lock:
-        return dict(_wake_words_map)
-
 @app.websocket("/ws")
-async def websocket_dashboard_endpoint(websocket: WebSocket):
+async def websocket_dashboard_endpoint(websocket: WebSocket, personel_id: int = Query(None)):
     """
-    React Dashboard'un anlık Kasa (işlem) güncellemelerini
-    dinlemesi için genel WebSocket bağlantısı.
+    React Dashboard'un anlık Kasa güncellemelerini dinlemesi için WebSocket endpoint'i.
+    Eğer bir personel paneli bağlanıyorsa query parametresi ile personel_id alır.
     """
     await websocket.accept()
     
-    # Manager'a eklemek için bu websocket nesnesine özel benzersiz bir ID (int) alıyoruz
-    dashboard_id = id(websocket) 
-    manager.active_connections[dashboard_id] = websocket
-    print(f"🖥️ Dashboard (Kasa Takip) bağlandı! (ID: {dashboard_id})")
+    # Eğer personel_id gelmediyse (genel dashboard ise) yine benzersiz bir id verelim
+    # Ama personel_id geldiyse doğrudan onu key yapalım ki /personeller/aktif doğru çalışsın!
+    connection_key = personel_id if personel_id is not None else id(websocket)
+    
+    manager.active_connections[connection_key] = websocket
+    print(f"🖥️ Bağlantı sağlandı! (ID/Personel ID: {connection_key})")
     
     try:
         while True:
-            # Dashboard sadece dinleyicidir, ancak bağlantıyı açık tutmak 
-            # ve ping-pong sağlamak için receive metodunu bekletiyoruz.
+            # Bağlantıyı açık tutmak için ping-pong dinlemesi
             await websocket.receive_text()
             
     except WebSocketDisconnect:
-        if dashboard_id in manager.active_connections:
-            del manager.active_connections[dashboard_id]
-        print(f"❌ Dashboard bağlantısı koptu. (ID: {dashboard_id})")
+        if connection_key in manager.active_connections:
+            del manager.active_connections[connection_key]
+        print(f"❌ Bağlantı koptu. (ID/Personel ID: {connection_key})")
     except Exception as e:
-        if dashboard_id in manager.active_connections:
-            del manager.active_connections[dashboard_id]
-        print(f"❌ Dashboard hatası: {e}")
-
-# ─────────────────────────────────────────────
-# WEBSOCKET ENDPOINT  (TEK, DOĞRU VERSİYON)
-# ─────────────────────────────────────────────
-@app.websocket("/ws/audio/{personel_id}")
-async def websocket_audio_endpoint(websocket: WebSocket, personel_id: int):
-    if vosk_model is None or whisper_model is None:
-        await websocket.close(code=1011, reason="Modeller yüklenmedi")
-        return
-
-    await manager.connect(websocket, personel_id)
-    recognizer = KaldiRecognizer(vosk_model, 16000)
-    audio_buffer = bytearray()
-    state = "WAKE_WORD"
-    
-    # Bekleyen işlem verileri (Döngü dışında tutulmalı!)
-    pending_tx = None
-    pending_undo_id = None
-
-    try:
-        while True:
-            data = await websocket.receive_bytes()
-            audio_buffer.extend(data)
-
-           # ── AŞAMA 1: Wake Word ─────────────────────────
-            if state == "WAKE_WORD":
-                if recognizer.AcceptWaveform(bytes(data)):
-                    metin = json.loads(recognizer.Result()).get("text", "")
-                    wake_map = aktif_tetikleme_haritasi()
-                    for kw, pid in wake_map.items():
-                        if kw in metin and pid == personel_id:
-                            state = "COMMAND"
-                            audio_buffer.clear()
-                            recognizer.Reset()
-                            await manager.send_text(personel_id, "DİNLİYORUM")
-                            
-                            # EKLENEN SATIR: Asistanın kulaklığa sesli olarak yanıt vermesi için
-                            await tts_ve_gonder(personel_id, "Dinliyorum.")
-                            
-                            await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "LISTENING", "personel_id": personel_id}))
-                            break
-
-            # ── AŞAMA 2: Komut Analizi ──────────────────
-            elif state == "COMMAND":
-                # VOSK'a sesi göndererek kullanıcının cümleyi bitirip es (duraksama) vermesini bekle
-                cumle_bitti = recognizer.AcceptWaveform(bytes(data))
-                
-                # 🌟 DEĞİŞİKLİK BURADA: Süreleri uzatıyoruz 🌟
-                # Maksimum süreyi 6 saniyeden 10 saniyeye çıkarıyoruz (Düşünme payı)
-                zaman_doldu = len(audio_buffer) >= 16000 * 2 * 10  
-                
-                # Minimum süreyi 2.5 saniyeden 3.8 saniyeye çıkarıyoruz. 
-                # (Kullanıcı nefes alsa bile 3.8 saniye dolmadan asistan sözünü kesmeyecek)
-                min_sure_gecti = len(audio_buffer) > 16000 * 2 * 3.8 
-                
-                # Kullanıcı sustuysa (ve en az 3.8 sn geçtiyse) VEYA 10 saniyelik maksimum sınır dolduysa
-                if (cumle_bitti and min_sure_gecti) or zaman_doldu:
-                    await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "THINKING", "personel_id": personel_id}))
-                    
-                    audio_np = (np.frombuffer(bytes(audio_buffer), dtype=np.int16).astype(np.float32) / 32768.0)
-                    loop = asyncio.get_running_loop()
-
-                    def faster_transcribe():
-                        segments, info = whisper_model.transcribe(
-                            audio_np,
-                            language="tr",
-                            initial_prompt=WHISPER_PROMPT,
-                            temperature=0.0,
-                            condition_on_previous_text=False,
-                            vad_filter=True,
-                            vad_parameters=dict(
-                                min_silence_duration_ms=500,
-                                speech_pad_ms=200,
-                            ),
-                            beam_size=5,
-                        )
-                        return "".join(s.text for s in segments).strip()
-
-                    komut_metni = await loop.run_in_executor(None, faster_transcribe)
-                    islem = sesli_komutu_ayristir(komut_metni, personel_id)
-
-                    # DURUM A: Geri Alma İsteği
-                    if islem.get("tip") == "UNDO_REQUEST":
-                        conn = psycopg2.connect(**DB_CONFIG)
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            SELECT id, islem_tipi, urun_cinsi, brut_miktar 
-                            FROM islemler WHERE personel_id = %s 
-                            ORDER BY islem_tarihi DESC LIMIT 1
-                        """, (personel_id,))
-                        last_tx = cursor.fetchone()
-                        cursor.close()
-                        conn.close()
-
-                        if last_tx:
-                            tx_id, tx_tip, tx_ayar, tx_miktar = last_tx
-                            tip_str = "alış" if tx_tip == "ALIS" else "satış"
-                            onay_metni = f"Son işleminiz {tx_miktar} gram {tx_ayar.split('_')[0]} ayar {tip_str}. Silmemi onaylıyor musunuz?"
-                            pending_undo_id = tx_id
-                            await tts_ve_gonder(personel_id, onay_metni)
-                            state = "CONFIRM_UNDO"
-                        else:
-                            await tts_ve_gonder(personel_id, "Silinecek işlem bulunamadı.")
-                            state = "WAKE_WORD"
-                            recognizer.Reset() # HATA DURUMUNDA SIFIRLA
-                        audio_buffer.clear()
-
-                    # DURUM B: Normal İşlem Kaydı
-                    elif islem.get("tip") == "NORMAL_TX":
-                        tip_metin     = "alış" if islem["islem_tipi"] == "ALIS" else "satış"
-                        odeme_str     = "kartlı" if islem.get("odeme_tipi") == "KART" else "nakit"
-                        kategori      = islem.get("urun_kategorisi", "ALTIN")
-
-                        if kategori == "SARRAFIYE":
-                            adet      = int(islem.get("miktar", 1))
-                            urun_adı  = islem["urun_cinsi"].replace("_ALTIN", "").replace("_", " ").title()
-                            onay_metni = (
-                                f"{adet} adet {urun_adı}, {odeme_str} {tip_metin}, "
-                                f"toplam {islem['net_has']:.3f} gram has. Kaydedeyim mi?"
-                            )
-                        elif kategori == "PIRLANTA":
-                            adet      = int(islem.get("miktar", 1))
-                            onay_metni = f"{adet} adet pırlanta, {odeme_str} {tip_metin}. Kaydedeyim mi?"
-                        else:
-                            onay_metni = (
-                                f"{islem['miktar']} gram {islem['urun_cinsi'].replace('_AYAR', '')} ayar, "
-                                f"{odeme_str} {tip_metin}. Kaydedeyim mi?"
-                            )
-
-                        # Varsa uyarıyı sesli bildir
-                        if islem.get("uyari"):
-                            await tts_ve_gonder(personel_id, f"Uyarı: {islem['uyari']}")
-                            await asyncio.sleep(0.1)
-
-                        pending_tx = islem
-                        
-                        await manager.broadcast_text(json.dumps({
-                            "type": "VOICE_STATE", 
-                            "state": "CONFIRMING", 
-                            "personel_id": personel_id,
-                            "islem": islem
-                        }))
-                        
-                        await tts_ve_gonder(personel_id, onay_metni)
-                        state = "CONFIRM"
-                        audio_buffer.clear()
-                        recognizer.Reset()
-                    
-                    # DURUM C: Hata
-                    else:
-                        await manager.send_text(personel_id, f"HATA:{islem.get('hata')}")
-                        state = "WAKE_WORD"
-                        audio_buffer.clear()
-                        recognizer.Reset()  # ÇOK ÖNEMLİ: Kendi kendine uyanma döngüsünü tamamen kırar!
-
-            # ── AŞAMA 3: Onay Dinleme ─────────────────────────────
-            elif state in ["CONFIRM", "CONFIRM_UNDO"]:
-                if recognizer.AcceptWaveform(bytes(data)):
-                    metin = json.loads(recognizer.Result()).get("text", "").lower()
-                    
-                    # YENİ KONTROL: Sadece bu kesin kelimeleri söylerse işlemi yap
-                    evet_mi = any(k in metin for k in ["evet", "tamam", "onaylıyorum", "kaydet", "doğru"])
-                    hayir_mi = any(k in metin for k in ["hayır", "iptal", "dur", "onaylamıyorum", "yanlış"])
-
-                    if evet_mi:
-                        if state == "CONFIRM" and pending_tx:
-                            # İşlemi yap ve sonucu kontrol et
-                            basarili_mi = veritabanina_yaz(pending_tx)
-                            
-                            if basarili_mi:
-                                await tts_ve_gonder(personel_id, "İşlem kaydedildi.")
-                            else:
-                                await tts_ve_gonder(personel_id, "Kayıt başarısız oldu, lütfen ekranı kontrol edin.")
-                                
-                        elif state == "CONFIRM_UNDO" and pending_undo_id:
-                            islem_sil_ve_geri_al(pending_undo_id)
-                            await tts_ve_gonder(personel_id, "İşlem silindi.")
-                        
-                        state = "WAKE_WORD"
-                        pending_tx = pending_undo_id = None
-                        recognizer.Reset()
-                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
-                    
-                    elif hayir_mi:
-                        await tts_ve_gonder(personel_id, "İşlem iptal edildi.")
-                        state = "WAKE_WORD"
-                        pending_tx = pending_undo_id = None
-                        recognizer.Reset()
-                        await manager.broadcast_text(json.dumps({"type": "VOICE_STATE", "state": "IDLE"}))
-
-    except WebSocketDisconnect:
-        manager.disconnect(personel_id)
-    except Exception as e:
-        print(f"Sistem Hatası: {e}")
-        manager.disconnect(personel_id)
-
-
-# ─────────────────────────────────────────────
-# THREAD → EVENT LOOP KÖPRÜSÜ
-# ─────────────────────────────────────────────
-def broadcast_from_thread(payload: str):
-    """AI thread'inden FastAPI event loop'una güvenli broadcast."""
-    if _main_loop is None:
-        return
-    asyncio.run_coroutine_threadsafe(
-        manager.broadcast_text(payload), _main_loop
-    )
-
-
-def send_audio_from_thread(p_id: int, audio_bytes: bytes):
-    """AI thread'inden belirli bir personele ses gönderir."""
-    if _main_loop is None:
-        return
-    asyncio.run_coroutine_threadsafe(
-        manager.send_audio(p_id, audio_bytes), _main_loop
-    )
-
-
-# ─────────────────────────────────────────────
-# METİN İŞLEME
-# ─────────────────────────────────────────────
-def metni_temizle(metin: str) -> str:
-    return metin.replace(",", ".").replace("-", " ").strip().lower()
-
-
-def metni_sayiya_dok(metin: str) -> str:
-    metin = metni_temizle(metin)
-    parcalar = metin.split()
-    yeni = []
-    toplam = 0.0
-    for i, p in enumerate(parcalar):
-        if p in SAYILAR:
-            toplam += SAYILAR[p]
-            sonraki_sayi = (i + 1 < len(parcalar)) and (parcalar[i + 1] in SAYILAR)
-            if not sonraki_sayi:
-                yeni.append(str(int(toplam)) if toplam == int(toplam) else str(toplam))
-                toplam = 0.0
-        else:
-            yeni.append(p)
-    return " ".join(yeni)
-
-
-def _odeme_tipini_ayristir(metin: str) -> str:
-    """
-    Metinden nakit/kart ödeme tipini ayıklar.
-    Bulunamazsa varsayılan 'NAKIT' döndürür.
-    """
-    kart_kelimeleri = ["kartlı", "kartla", "kart", "kredi", "banka", "pos", "temassız"]
-    if any(k in metin for k in kart_kelimeleri):
-        return "KART"
-    return "NAKIT"
-
-
-def sesli_komutu_ayristir(ham_metin: str, personel_id: int) -> dict:
-    # 1. Kelimeleri matematiksel sembollere çevir
-    ham_metin = ham_metin.lower()
-    ham_metin = ham_metin.replace("nokta", ".").replace("virgül", ".").replace("buçuk", ".5")
-    
-    # 2. Yazıyla söylenen sayıları (yirmi, yüz vs.) rakamlara dönüştür
-    metin = metni_sayiya_dok(ham_metin)
-    
-    # 🌟 3. HASSAS ONDALIK BİRLEŞTİRİCİ 🌟
-    metin = metin.replace(" . ", ".").replace(" .", ".").replace(". ", ".")
-    eski_metin = ""
-    while metin != eski_metin:
-        eski_metin = metin
-        metin = re.sub(r"(\d+\.\d*)\s+(\d+)(?!\s+ayar)", r"\1\2", metin)
-    
-    print(f"  [İşlenen metin]: {metin}")
-
-    # --- GERİ ALMA KONTROLÜ ---
-    silme_kelimeleri = [
-        "işlemi sil", "kaydı sil", "işlemi iptal et", 
-        "işlemi geri al", "son işlemi", "yanlış oldu"
-    ]
-    if any(k in metin for k in silme_kelimeleri):
-        return {"tip": "UNDO_REQUEST", "personel_id": personel_id}
-
-    # --- İŞLEM TİPİ KONTROLÜ ---
-    if "alış" in metin or "alıs" in metin or "aliş" in metin or "alis" in metin:
-        islem_tipi = "ALIS"
-    elif "satış" in metin or "satis" in metin or "satiş" in metin:
-        islem_tipi = "SATIS"
-    else:
-        return {"hata": f"İşlem tipi bulunamadı. Duyulan: {ham_metin}"}
-
-    # --- FİYAT / TUTAR KONTROLÜ (Ortak) ---
-    fiyat_match = re.search(r"(?:fiyat|tutar|lira|dolar|euro)\s*(\d+(?:\.\d+)?)", metin)
-    birim_fiyat = float(fiyat_match.group(1)) if fiyat_match else 0.0
-
-    # Ödeme tipini tüm senaryolar için şimdiden belirle (PIRLANTA senaryosu öncesi)
-    odeme_tipi = _odeme_tipini_ayristir(metin)
-
-    # 💎 SENARYO 1: PIRLANTA KONTROLÜ (Adet Bazlı)
-    pirlanta_kelimeler = ["pırlanta", "elmas", "tektaş", "beştaş"]
-    if any(pk in metin for pk in pirlanta_kelimeler):
-        adet_match = re.search(r"(\d+)\s*(?:adet|tane)?\s*(?:pırlanta|elmas|tektaş|beştaş)", metin)
-        uyari = None
-        if adet_match:
-            miktar = float(adet_match.group(1))
-        else:
-            miktar = 1.0
-            uyari = f"Adet bulunamadı, 1 adet varsayıldı. Duyulan: {ham_metin}"
-            print(f"  [UYARI] {uyari}")
-        sonuc = {
-            "tip": "NORMAL_TX", "personel_id": personel_id, "islem_tipi": islem_tipi,
-            "urun_kategorisi": "PIRLANTA", "urun_cinsi": "PIRLANTA",
-            "islem_birimi": "ADET", "miktar": miktar, "adet": int(miktar),
-            "birim_fiyat": birim_fiyat, "odeme_tipi": odeme_tipi,
-            "milyem": 0.0, "net_has": 0.0,
-        }
-        if uyari:
-            sonuc["uyari"] = uyari
-        return sonuc
-
-    # 🪙 SENARYO 2: SARRAFİYE KONTROLÜ (Merkezi Config'den — Adet Bazlı)
-    sarrafiye_kelimesi = next((k for k in SARRAFIYE_CONFIG.keys() if k in metin), None)
-    if sarrafiye_kelimesi:
-        # Adet ayrıştır — kelimeden önce veya sonra sayı ara
-        adet_match = re.search(
-            r"(\d+(?:\.\d+)?)\s*(?:adet|tane)?\s*" + sarrafiye_kelimesi, metin
-        ) or re.search(
-            sarrafiye_kelimesi + r"\s*(?:adet|tane)?\s*(\d+(?:\.\d+)?)", metin
-        )
-
-        uyari = None
-        if adet_match:
-            miktar = float(adet_match.group(1))
-        else:
-            miktar = 1.0
-            uyari = f"Adet bulunamadı, 1 adet varsayıldı. Duyulan: {ham_metin}"
-            print(f"  [UYARI] {uyari}")
-
-        s_cfg = SARRAFIYE_CONFIG[sarrafiye_kelimesi]
-        hesaplanan_has = round(miktar * s_cfg["has_karsiligi"], 4)
-        sonuc = {
-            "tip": "NORMAL_TX", "personel_id": personel_id, "islem_tipi": islem_tipi,
-            "urun_kategorisi": "SARRAFIYE", "urun_cinsi": s_cfg["urun_cinsi"],
-            "islem_birimi": "ADET", "miktar": miktar, "adet": int(miktar),
-            "birim_fiyat": birim_fiyat, "odeme_tipi": odeme_tipi,
-            "milyem": 0.0, "net_has": hesaplanan_has,
-        }
-        if uyari:
-            sonuc["uyari"] = uyari
-        return sonuc
-
-    # 🏆 SENARYO 3: HAS ALTIN / HURDA (Mevcut Gramajlı Sistem)
-    # 1. Önce "24 ayar" gibi kesin kalıpları arayalım ki ondalık sayılarla karışmasın
-    ayar_match = re.search(r"\b(14|18|22|24)\s+ayar\b", metin)
-    
-    # 2. Eğer "ayar" kelimesini söylemediyse (örn: 10 gram 22 alış), 
-    # sağında solunda nokta/virgül olmayan yalıtılmış bir ayar değeri arayalım
-    if not ayar_match:
-        ayar_match = re.search(r"(?<![.,\d])\b(14|18|22|24)\b(?![.,\d])", metin)
-
-    if not ayar_match:
-        return {"hata": f"Ürün kategorisi veya altın ayarı bulunamadı. Duyulan: {ham_metin}"}
-    
-    ayar_degeri = ayar_match.group(1)
-    urun_cinsi = f"{ayar_degeri}_AYAR"
-    
-    # 3. Miktarı doğru bulmak için tespit ettiğimiz "Ayar" kelimesini ve sayısını cümleden çıkartalım
-    metin_ayarsiz = metin[:ayar_match.start()] + metin[ayar_match.end():]
-    
-    # 4. Kalan metin içerisindeki ilk sayıyı (ondalıklı veya tam) miktar olarak alalım
-    miktar_match = re.search(r"(\d+(?:[.,]\d+)?)", metin_ayarsiz)
-    
-    if not miktar_match:
-        return {"hata": f"Miktar (gram) bulunamadı. Duyulan: {ham_metin}"}
-
-    miktar = float(miktar_match.group(1).replace(",", "."))
-    if miktar <= 0:
-        return {"hata": f"Geçersiz miktar: {miktar}"}
-
-    milyem = MILYEM_MAP.get(urun_cinsi, 0.0)
-    hesaplanan_has = round(miktar * milyem, 4)
-
-    print(f"  [Ayrıştırma]: tip={islem_tipi}, kategori=ALTIN, ayar={urun_cinsi}, miktar={miktar}gr, milyem={milyem}, odeme={odeme_tipi}")
-
-    return {
-        "tip": "NORMAL_TX",
-        "personel_id": personel_id,
-        "islem_tipi": islem_tipi,
-        "urun_kategorisi": "ALTIN",
-        "islem_birimi": "GRAM",
-        "urun_cinsi": urun_cinsi,
-        "miktar": miktar,
-        "brut_miktar": miktar,   # geriye dönük uyumluluk
-        "adet": 1,
-        "birim_fiyat": birim_fiyat,
-        "odeme_tipi": odeme_tipi,
-        "milyem": milyem,
-        "net_has": hesaplanan_has,
-    }
-
-
-# ─────────────────────────────────────────────
-# VERİTABANI
-# ─────────────────────────────────────────────
-#
-# MIGRATION SQL (İlk çalıştırmada bir kere manuel çalıştırın):
-# ALTER TABLE islemler ADD COLUMN IF NOT EXISTS odeme_tipi VARCHAR(10) DEFAULT 'NAKIT';
-# ALTER TABLE islemler ADD COLUMN IF NOT EXISTS adet INTEGER DEFAULT 1;
-#
-def veritabanina_yaz(islem: dict) -> bool:
-    try:
-        conn   = psycopg2.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO islemler
-            (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi,
-             brut_miktar, milyem, birim_fiyat, net_has_miktar, odeme_tipi, adet)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
-            """,
-            (
-                islem["personel_id"],
-                islem["islem_tipi"],
-                islem.get("urun_kategorisi", "ALTIN"),
-                islem.get("islem_birimi", "GRAM"),
-                islem["urun_cinsi"],
-                islem["miktar"],
-                islem.get("milyem", 0.0),
-                islem.get("birim_fiyat", 0.0),
-                islem["net_has"],
-                islem.get("odeme_tipi", "NAKIT"),
-                islem.get("adet", 1),
-            ),
-        )
-        row = cursor.fetchone()
-
-        if not row:
-            raise Exception("Veritabanı id döndürmedi.")
-
-        row_id = row[0]
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        uyari_mesaji = islem.get("uyari")
-        if uyari_mesaji:
-            print(f"  [UYARI] {uyari_mesaji}")
-
-        payload = json.dumps({
-            "type":       "NEW_TX",
-            "id":         row_id,
-            "tip":        islem["islem_tipi"],
-            "kategori":   islem.get("urun_kategorisi", "ALTIN"),
-            "birim":      islem.get("islem_birimi", "GRAM"),
-            "miktar":     islem["miktar"],
-            "adet":       islem.get("adet", 1),
-            "ayar":       islem["urun_cinsi"],
-            "has":        islem["net_has"],
-            "odeme_tipi": islem.get("odeme_tipi", "NAKIT"),
-            "uyari":      uyari_mesaji,
-        }, ensure_ascii=False)
-
-        broadcast_from_thread(payload)
-        return True
-
-    except Exception as e:
-        print(f"  [DB HATA]: {e}")
-        return False
-
-# ─────────────────────────────────────────────
-# YARDIMCI FONKSİYONLAR
-# ─────────────────────────────────────────────
-def sistem_biipi(frekans, sure):
-    if platform.system() == "Windows":
-        winsound.Beep(frekans, sure)
-    else:
-        print("\a", end="", flush=True)
-
+        if connection_key in manager.active_connections:
+            del manager.active_connections[connection_key]
+        print(f"❌ Soket hatası: {e}")
 
 
 def _parse_decimal(value: str | None) -> float | None:
@@ -949,6 +504,71 @@ def _market_with_trends(current: dict, previous: dict | None):
     return payload
 
 
+def _get_market_data_cached():
+    global _market_cache_data, _market_cache_prev_data, _market_cache_ts
+    now = time.time()
+    
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # gunluk_kurlar tablosunu kontrol et
+        cursor.execute("SELECT COUNT(*) FROM gunluk_kurlar")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            # DB'de kur yoksa TCMB'den çekip kaydedelim (Seed)
+            yeni = _fetch_market_data_from_tcmb()
+            cursor.execute(
+                "INSERT INTO gunluk_kurlar (usd_try, eur_try, gram_altin_24k_try) VALUES (%s, %s, %s)",
+                (yeni["usd_try"], yeni["eur_try"], yeni["gram_altin_24k_try"])
+            )
+            conn.commit()
+            yeni["kaynak"] = "TCMB (Otomatik Seed)"
+            
+            with _market_cache_lock:
+                _market_cache_prev_data = _market_cache_data
+                _market_cache_data = yeni
+                _market_cache_ts = now
+                return _market_with_trends(_market_cache_data, _market_cache_prev_data)
+        else:
+            # DB'deki kurları kullan
+            cursor.execute("SELECT usd_try, eur_try, gram_altin_24k_try, guncellenme_tarihi FROM gunluk_kurlar LIMIT 1")
+            r = cursor.fetchone()
+            yeni = {
+                "usd_try": float(r[0]),
+                "eur_try": float(r[1]),
+                "gram_altin_24k_try": float(r[2]),
+                "guncellenme_ts": int(r[3].timestamp()) if r[3] else int(time.time()),
+                "kaynak": "Kullanıcı Tanımlı (Yerel)",
+            }
+            
+            with _market_cache_lock:
+                _market_cache_prev_data = _market_cache_data
+                _market_cache_data = yeni
+                _market_cache_ts = now
+                return _market_with_trends(_market_cache_data, _market_cache_prev_data)
+    except Exception as e:
+        print(f"[UYARI] DB'den kur çekilirken hata: {e}, TCMB'ye düşülüyor.")
+        # Hata durumunda TCMB cache'ine düş
+        with _market_cache_lock:
+            if _market_cache_data and (now - _market_cache_ts) < _MARKET_CACHE_TTL:
+                return _market_with_trends(_market_cache_data, _market_cache_prev_data)
+        try:
+            yeni = _fetch_market_data_from_tcmb()
+            with _market_cache_lock:
+                _market_cache_prev_data = _market_cache_data
+                _market_cache_data = yeni
+                _market_cache_ts = now
+                return _market_with_trends(_market_cache_data, _market_cache_prev_data)
+        except Exception as ex:
+            raise ex
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
 def _fetch_market_data_from_tcmb():
     with urllib.request.urlopen("https://www.tcmb.gov.tr/kurlar/today.xml", timeout=15) as resp:
         xml_raw = resp.read()
@@ -971,20 +591,6 @@ def _fetch_market_data_from_tcmb():
     }
 
 
-def _get_market_data_cached():
-    global _market_cache_data, _market_cache_prev_data, _market_cache_ts
-    now = time.time()
-    with _market_cache_lock:
-        if _market_cache_data and (now - _market_cache_ts) < _MARKET_CACHE_TTL:
-            return _market_with_trends(_market_cache_data, _market_cache_prev_data)
-    yeni = _fetch_market_data_from_tcmb()
-    with _market_cache_lock:
-        _market_cache_prev_data = _market_cache_data
-        _market_cache_data = yeni
-        _market_cache_ts = now
-        return _market_with_trends(_market_cache_data, _market_cache_prev_data)
-
-
 def _query_islemler(conn, gunler=None, start_date=None, end_date=None, tip=None, personel_id=None, limit=None, odeme_tipi=None):
     cursor = conn.cursor()
     query = """
@@ -1001,7 +607,9 @@ def _query_islemler(conn, gunler=None, start_date=None, end_date=None, tip=None,
             COALESCE(i.urun_kategorisi, 'ALTIN')  AS urun_kategorisi,
             COALESCE(i.islem_birimi,   'GRAM')    AS islem_birimi,
             COALESCE(i.odeme_tipi,     'NAKIT')   AS odeme_tipi,
-            COALESCE(i.adet, 1)                   AS adet
+            COALESCE(i.adet, 1)                   AS adet,
+            COALESCE(i.doviz_tutar, 0)            AS doviz_tutar,
+            COALESCE(i.doviz_kuru, 1)             AS doviz_kuru
         FROM islemler i
         LEFT JOIN personeller p ON p.id = i.personel_id
         WHERE 1=1
@@ -1054,6 +662,284 @@ def read_root():
     return {"durum": "çalışıyor"}
 
 
+# ─────────────────────────────────────────────
+# ÜRÜN YÖNETİMİ ENDPOINT'LERİ
+# ─────────────────────────────────────────────
+@app.get("/urunler")
+def urunleri_getir(hepsi: bool = False):
+    """Ürün listesini döner. hepsi=True ise pasif ürünleri de dahil eder."""
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        if hepsi:
+            cursor.execute(
+                "SELECT id, ad, urun_cinsi, urun_kategorisi, islem_birimi, "
+                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer') FROM urunler ORDER BY sira ASC, id ASC"
+            )
+        else:
+            cursor.execute(
+                "SELECT id, ad, urun_cinsi, urun_kategorisi, islem_birimi, "
+                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer') FROM urunler "
+                "WHERE aktif = TRUE ORDER BY sira ASC, id ASC"
+            )
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": r[0], "ad": r[1], "urun_cinsi": r[2],
+                "urun_kategorisi": r[3], "islem_birimi": r[4],
+                "milyem": float(r[5]), "has_karsiligi": float(r[6]),
+                "renk": r[7], "sira": r[8], "aktif": r[9],
+                "urun_grubu": r[10]
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ürünler getirilemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
+@app.post("/urunler", status_code=201)
+async def urun_ekle(payload: UrunPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO urunler
+               (ad, urun_cinsi, urun_kategorisi, islem_birimi, milyem, has_karsiligi, renk, sira, aktif, urun_grubu)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
+            (
+                payload.ad.strip(), payload.urun_cinsi.strip().upper(),
+                payload.urun_kategorisi.strip().upper(), payload.islem_birimi.strip().upper(),
+                payload.milyem, payload.has_karsiligi,
+                payload.renk, payload.sira, payload.aktif,
+                (payload.urun_grubu or "Diğer").strip()
+            )
+        )
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_URUNLER"}))
+        return {"id": new_id, "mesaj": "Ürün başarıyla eklendi."}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Ürün eklenemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
+@app.put("/urunler/{urun_id}")
+async def urun_guncelle(urun_id: int, payload: UrunGuncellePayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+
+        # Sadece gönderilen alanları güncelle
+        alanlar = []
+        degerler = []
+        alan_map = {
+            "ad": payload.ad, "urun_cinsi": payload.urun_cinsi,
+            "urun_kategorisi": payload.urun_kategorisi,
+            "islem_birimi": payload.islem_birimi, "milyem": payload.milyem,
+            "has_karsiligi": payload.has_karsiligi, "renk": payload.renk,
+            "sira": payload.sira, "aktif": payload.aktif,
+            "urun_grubu": payload.urun_grubu
+        }
+        for alan, deger in alan_map.items():
+            if deger is not None:
+                alanlar.append(f"{alan} = %s")
+                # String alanları büyük harfe çevir
+                if alan in ("urun_cinsi", "urun_kategorisi", "islem_birimi") and isinstance(deger, str):
+                    degerler.append(deger.strip().upper())
+                else:
+                    degerler.append(deger.strip() if isinstance(deger, str) else deger)
+
+        if not alanlar:
+            raise HTTPException(status_code=400, detail="Güncellenecek alan bulunamadı.")
+
+        degerler.append(urun_id)
+        cursor.execute(
+            f"UPDATE urunler SET {', '.join(alanlar)} WHERE id = %s RETURNING id",
+            tuple(degerler)
+        )
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Ürün bulunamadı.")
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_URUNLER"}))
+        return {"mesaj": "Ürün güncellendi."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Ürün güncellenemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
+@app.delete("/urunler/{urun_id}")
+async def urun_sil(urun_id: int):
+    """Ürünü tamamen siler. İşlem geçmişini korumak için aktif=False tercih edilir."""
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM urunler WHERE id = %s RETURNING id", (urun_id,))
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Ürün bulunamadı.")
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_URUNLER"}))
+        return {"mesaj": "Ürün silindi."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Ürün silinemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
+# ─────────────────────────────────────────────
+# KATEGORİ YÖNETİMİ ENDPOINT'LERİ
+# ─────────────────────────────────────────────
+@app.get("/kategoriler")
+def kategorileri_getir(hepsi: bool = False):
+    """Tüm kategorileri döner. hepsi=True ise pasif kategorileri de dahil eder."""
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        if hepsi:
+            cursor.execute("SELECT id, ad, etiket, renk, sira, aktif FROM kategoriler ORDER BY sira ASC, id ASC")
+        else:
+            cursor.execute("SELECT id, ad, etiket, renk, sira, aktif FROM kategoriler WHERE aktif = TRUE ORDER BY sira ASC, id ASC")
+        rows = cursor.fetchall()
+        return [
+            {"id": r[0], "ad": r[1], "etiket": r[2], "renk": r[3], "sira": r[4], "aktif": r[5]}
+            for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Kategoriler getirilemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
+@app.post("/kategoriler", status_code=201)
+async def kategori_ekle(payload: KategoriPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO kategoriler (ad, etiket, renk, sira, aktif) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (payload.ad.strip().upper(), payload.etiket.strip(), payload.renk.strip(), payload.sira, payload.aktif)
+        )
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_KATEGORILER"}))
+        return {"id": new_id, "mesaj": "Kategori başarıyla eklendi."}
+    except Exception as e:
+        if conn: conn.rollback()
+        if "unique" in str(e).lower():
+            raise HTTPException(status_code=409, detail="Bu kategori kodu zaten mevcut.")
+        raise HTTPException(status_code=500, detail=f"Kategori eklenemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
+@app.put("/kategoriler/{kategori_id}")
+async def kategori_guncelle(kategori_id: int, payload: KategoriGuncellePayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        alanlar = []
+        degerler = []
+        if payload.ad is not None:
+            alanlar.append("ad = %s")
+            degerler.append(payload.ad.strip().upper())
+        if payload.etiket is not None:
+            alanlar.append("etiket = %s")
+            degerler.append(payload.etiket.strip())
+        if payload.renk is not None:
+            alanlar.append("renk = %s")
+            degerler.append(payload.renk.strip())
+        if payload.sira is not None:
+            alanlar.append("sira = %s")
+            degerler.append(payload.sira)
+        if payload.aktif is not None:
+            alanlar.append("aktif = %s")
+            degerler.append(payload.aktif)
+        if not alanlar:
+            raise HTTPException(status_code=400, detail="Güncellenecek alan bulunamadı.")
+        degerler.append(kategori_id)
+        cursor.execute(
+            f"UPDATE kategoriler SET {', '.join(alanlar)} WHERE id = %s RETURNING id",
+            tuple(degerler)
+        )
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Kategori bulunamadı.")
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_KATEGORILER"}))
+        return {"mesaj": "Kategori güncellendi."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Kategori güncellenemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
+@app.delete("/kategoriler/{kategori_id}")
+async def kategori_sil(kategori_id: int):
+    """Kategoriyi siler. İçinde ürün varsa 409 hatası döner."""
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        # Önce bu kategoride ürün var mı kontrol et
+        cursor.execute(
+            "SELECT ad FROM kategoriler WHERE id = %s",
+            (kategori_id,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Kategori bulunamadı.")
+        kategori_adi = row[0]
+        cursor.execute(
+            "SELECT COUNT(*) FROM urunler WHERE UPPER(urun_kategorisi) = UPPER(%s)",
+            (kategori_adi,)
+        )
+        urun_sayisi = cursor.fetchone()[0]
+        if urun_sayisi > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Bu kategoride {urun_sayisi} ürün var. Önce ürünleri başka kategoriye taşıyın veya silin."
+            )
+        cursor.execute("DELETE FROM kategoriler WHERE id = %s", (kategori_id,))
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_KATEGORILER"}))
+        return {"mesaj": "Kategori silindi."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Kategori silinemedi: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+
 @app.get("/personeller")
 def personelleri_getir():
     conn = cursor = None
@@ -1089,39 +975,44 @@ async def manuel_islem_ekle(payload: IslemPayload):
         urun_kategorisi = payload.urun_kategorisi.strip().upper()
         islem_birimi    = payload.islem_birimi.strip().upper()
         odeme_tipi      = payload.odeme_tipi.strip().upper() if payload.odeme_tipi else "NAKIT"
-        if odeme_tipi not in ["NAKIT", "KART"]:
-            raise HTTPException(status_code=400, detail="Geçersiz ödeme tipi. 'NAKIT' veya 'KART' olmalıdır.")
+        if odeme_tipi not in ["NAKIT", "KART", "USD", "EUR"]:
+            raise HTTPException(status_code=400, detail="Geçersiz ödeme tipi. 'NAKIT', 'KART', 'USD' veya 'EUR' olmalıdır.")
         adet = max(1, int(payload.adet))
         brut = float(payload.brut_miktar)
 
         milyem = 0.0
         hesaplanan_has = 0.0
 
-        # 2. Kategoriye Göre Has Hesaplama — tek merkezi mantık
+        # 2. Kategoriye Göre Has Hesaplama — override varsa kullan, yoksa MILYEM_MAP
         if urun_kategorisi == "PIRLANTA":
             milyem = 0.0
             hesaplanan_has = 0.0
 
         elif urun_kategorisi == "SARRAFIYE":
-            # Merkezi SARRAFIYE_CINSI_MAP kullan (tek kaynak)
-            has_karsiligi = SARRAFIYE_CINSI_MAP.get(urun_cinsi)
-            if has_karsiligi is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Geçersiz sarrafiye cinsi: {urun_cinsi}. "
-                           f"Geçerli değerler: {list(SARRAFIYE_CINSI_MAP.keys())}"
-                )
-            hesaplanan_has = round(brut * has_karsiligi, 4)
+            if payload.has_karsiligi_override is not None:
+                # Dinamik üründen gelen has_karsiligi
+                has_per = payload.has_karsiligi_override
+            else:
+                has_per = SARRAFIYE_CINSI_MAP.get(urun_cinsi)
+                if has_per is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Geçersiz sarrafiye cinsi: {urun_cinsi}. "
+                               f"Geçerli değerler: {list(SARRAFIYE_CINSI_MAP.keys())}"
+                    )
+            hesaplanan_has = round(brut * has_per, 4)
 
         else:
             # Standart ALTIN / HURDA (Gram × Milyem)
-            milyem = MILYEM_MAP.get(urun_cinsi)
-            if milyem is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Geçersiz altın ayarı: {urun_cinsi}. "
-                           f"Geçerli değerler: {list(MILYEM_MAP.keys())}"
-                )
+            if payload.milyem_override is not None:
+                # Dinamik üründen gelen milyem
+                milyem = payload.milyem_override
+            else:
+                milyem = MILYEM_MAP.get(urun_cinsi)
+                if milyem is None:
+                    # Bilinmeyen ayar için 0 milyem kullan, kaydet ama uyar
+                    print(f"[UYARI] Bilinmeyen ayır: {urun_cinsi}, milyem=0 kullanıldı")
+                    milyem = 0.0
             hesaplanan_has = round(brut * milyem, 4)
 
         # 3. Veritabanına Yazma
@@ -1131,14 +1022,15 @@ async def manuel_islem_ekle(payload: IslemPayload):
             """
             INSERT INTO islemler
             (personel_id, islem_tipi, urun_kategorisi, islem_birimi, urun_cinsi,
-             brut_miktar, milyem, birim_fiyat, net_has_miktar, odeme_tipi, adet)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             brut_miktar, milyem, birim_fiyat, net_has_miktar, odeme_tipi, adet,
+             doviz_tutar, doviz_kuru)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 payload.personel_id, islem_tipi, urun_kategorisi, islem_birimi,
                 urun_cinsi, brut, milyem, payload.birim_fiyat, hesaplanan_has,
-                odeme_tipi, adet,
+                odeme_tipi, adet, payload.doviz_tutar, payload.doviz_kuru
             ),
         )
         row_id = cursor.fetchone()[0]
@@ -1157,6 +1049,9 @@ async def manuel_islem_ekle(payload: IslemPayload):
             "ayar":       urun_cinsi,
             "has":        hesaplanan_has,
             "odeme_tipi": odeme_tipi,
+            "doviz_tutar": payload.doviz_tutar,
+            "doviz_kuru":  payload.doviz_kuru,
+            "birim_fiyat": payload.birim_fiyat,
         }, ensure_ascii=False)
         await manager.broadcast_text(ws_payload)
 
@@ -1177,7 +1072,7 @@ async def manuel_islem_ekle(payload: IslemPayload):
         if conn: conn.close()
 
 @app.post("/personeller")
-def personel_ekle(payload: PersonelPayload):
+async def personel_ekle(payload: PersonelPayload):
     conn = cursor = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
@@ -1189,7 +1084,14 @@ def personel_ekle(payload: PersonelPayload):
         )
         row = cursor.fetchone()
         conn.commit()
-        personel_tetikleme_haritasi_yenile()
+        
+        # Burayı korumaya alıyoruz ki ses tetikleme hatası tüm API'yi 500'e düşürmesin
+        try:
+            personel_tetikleme_haritasi_yenile()
+        except Exception as nlp_err:
+            print(f"[UYARI] Personel eklendi fakat ses haritası yenilenemedi: {nlp_err}")
+
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_PERSONELLER"}))
         return {"id": row[0], "ad_soyad": row[1], "tetikleme_kelimesi": row[2], "rol": row[3]}
     except psycopg2.errors.UniqueViolation:
         if conn: conn.rollback()
@@ -1203,7 +1105,7 @@ def personel_ekle(payload: PersonelPayload):
 
 
 @app.put("/personeller/{personel_id}")
-def personel_guncelle(personel_id: int, payload: PersonelPayload):
+async def personel_guncelle(personel_id: int, payload: PersonelPayload):
     conn = cursor = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
@@ -1219,6 +1121,7 @@ def personel_guncelle(personel_id: int, payload: PersonelPayload):
             raise HTTPException(status_code=404, detail="Personel bulunamadı.")
         conn.commit()
         personel_tetikleme_haritasi_yenile()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_PERSONELLER"}))
         return {"id": row[0], "ad_soyad": row[1], "tetikleme_kelimesi": row[2], "rol": row[3]}
     except psycopg2.errors.UniqueViolation:
         if conn: conn.rollback()
@@ -1233,7 +1136,7 @@ def personel_guncelle(personel_id: int, payload: PersonelPayload):
         if conn: conn.close()
 
 @app.delete("/islemler/{islem_id}")
-def islem_sil_ve_geri_al(islem_id: int):
+async def islem_sil_ve_geri_al(islem_id: int):
     conn = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
@@ -1254,13 +1157,14 @@ def islem_sil_ve_geri_al(islem_id: int):
         cursor.close()
         
         # Tüm bağlı Dashboard'lara silme emrini broadcast et
+        has_val = float(net_has) if net_has is not None else 0.0
         payload = json.dumps({
             "type": "UNDO_TX",
             "id": islem_id,
             "tip": islem_tipi,
-            "has": float(net_has)
+            "has": has_val
         })
-        broadcast_from_thread(payload)
+        await manager.broadcast_text(payload)
         
         return {"mesaj": "İşlem başarıyla geri alındı."}
     except Exception as e:
@@ -1270,25 +1174,70 @@ def islem_sil_ve_geri_al(islem_id: int):
         if conn: conn.close()
 
 @app.delete("/personeller/{personel_id}")
-def personel_sil(personel_id: int):
+async def personel_sil(personel_id: int, mod: str = Query("normal")):
+    """
+    Personeli siler.
+    mod=normal   → İşlem geçmişi varsa 400 döner (default).
+    mod=cascade  → Personele ait tüm islemler silinir, sonra personel silinir.
+    mod=detach   → Personele ait islemler anonim kalır (personel_id=NULL), personel silinir.
+    """
     conn = cursor = None
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         personeller_tablosunu_dogrula(conn)
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM personeller WHERE id = %s RETURNING id", (personel_id,))
-        row = cursor.fetchone()
-        if not row:
-            conn.rollback()
+
+        # Önce personelin var olduğunu doğrula
+        cursor.execute("SELECT id, ad_soyad FROM personeller WHERE id = %s", (personel_id,))
+        personel_row = cursor.fetchone()
+        if not personel_row:
             raise HTTPException(status_code=404, detail="Personel bulunamadı.")
+
+        if mod == "cascade":
+            # Personele ait tüm işlemleri sil, sonra personeli sil
+            cursor.execute("DELETE FROM islemler WHERE personel_id = %s", (personel_id,))
+            cursor.execute("DELETE FROM personeller WHERE id = %s", (personel_id,))
+
+        elif mod == "detach":
+            # islemler.personel_id NULL'a izin verecek şekilde ALTER (sadece bir kez çalışır)
+            cursor.execute("""
+                ALTER TABLE islemler
+                ALTER COLUMN personel_id DROP NOT NULL
+            """)
+            # Personele ait işlemlerin personel_id'sini NULL yap
+            cursor.execute(
+                "UPDATE islemler SET personel_id = NULL WHERE personel_id = %s",
+                (personel_id,)
+            )
+            cursor.execute("DELETE FROM personeller WHERE id = %s", (personel_id,))
+
+        else:
+            # normal mod — ForeignKeyViolation'ı catch et
+            cursor.execute("DELETE FROM personeller WHERE id = %s RETURNING id", (personel_id,))
+            if cursor.fetchone() is None:
+                raise HTTPException(status_code=404, detail="Personel bulunamadı.")
+
         conn.commit()
-        personel_tetikleme_haritasi_yenile()
-        return {"mesaj": "Personel silindi.", "id": row[0]}
+
+        try:
+            personel_tetikleme_haritasi_yenile()
+        except Exception as e:
+            print(f"Uyarı: Personel silindi ancak ses haritası güncellenemedi: {e}")
+
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_PERSONELLER"}))
+        return {"mesaj": "Personel başarıyla silindi.", "id": personel_id}
+
+    except psycopg2.errors.ForeignKeyViolation:
+        if conn: conn.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Bu personele ait geçmiş işlemler bulunuyor. Silmek için 'İşlemleri de Sil' veya 'İşlemleri Bırak' seçeneğini kullanın."
+        )
     except HTTPException:
         raise
     except Exception as e:
         if conn: conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Personel silinemedi: {e}")
+        raise HTTPException(status_code=500, detail=f"Beklenmeyen sistem hatası: {str(e)}")
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
@@ -1323,6 +1272,8 @@ def islemleri_getir(
                 "islem_birimi":    r[10],
                 "odeme_tipi":      r[11],
                 "adet":            int(r[12]) if r[12] is not None else 1,
+                "doviz_tutar":     float(r[13]) if r[13] is not None else 0.0,
+                "doviz_kuru":      float(r[14]) if r[14] is not None else 1.0,
             }
             for r in rows
         ]
@@ -1463,6 +1414,55 @@ def piyasa_kurlari():
         return _get_market_data_cached()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Piyasa verisi alınamadı: {e}")
+
+
+class KurlarPayload(BaseModel):
+    usd_try: float
+    eur_try: float
+    gram_altin_24k_try: float
+
+
+@app.put("/piyasa/kurlar")
+async def kurlari_guncelle(payload: KurlarPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM gunluk_kurlar")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            cursor.execute(
+                "INSERT INTO gunluk_kurlar (usd_try, eur_try, gram_altin_24k_try) VALUES (%s, %s, %s)",
+                (payload.usd_try, payload.eur_try, payload.gram_altin_24k_try)
+            )
+        else:
+            cursor.execute(
+                "UPDATE gunluk_kurlar SET usd_try = %s, eur_try = %s, gram_altin_24k_try = %s, guncellenme_tarihi = NOW()",
+                (payload.usd_try, payload.eur_try, payload.gram_altin_24k_try)
+            )
+        conn.commit()
+        
+        # Güncellenen kurları global cache değişkenlerine de yansıtalım
+        global _market_cache_data, _market_cache_ts
+        _market_cache_data = {
+            "usd_try": payload.usd_try,
+            "eur_try": payload.eur_try,
+            "gram_altin_24k_try": payload.gram_altin_24k_try,
+            "guncellenme_ts": int(time.time()),
+            "kaynak": "Kullanıcı Tanımlı (Yerel)",
+        }
+        _market_cache_ts = time.time()
+        
+        # Soket üzerinden tüm bağlı istemcilere kur değişimini haber ver
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_KURLAR"}))
+        
+        return {"mesaj": "Kurlar başarıyla güncellendi."}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 
 class CorporatePDF(FPDF):
@@ -1676,4 +1676,221 @@ def generate_pdf_report(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF oluşturulamadı: {e}")
     finally:
+        if conn: conn.close()
+
+# ─────────────────────────────────────────────
+# TOPTANCI (CARI) MODÜLÜ
+# ─────────────────────────────────────────────
+
+class ToptanciPayload(BaseModel):
+    unvan: str
+    telefon: str | None = None
+    aciklama: str | None = None
+
+class ToptanciIslemPayload(BaseModel):
+    islem_tipi: str # "Borçlanma", "Ödeme" vb.
+    islem_detayi: str # "Nakit Ödeme", "Hurda Teslimi", "Mal Alış" vb.
+    has_altin: float = 0.0
+    tl_tutar: float = 0.0
+    aciklama: str | None = None
+
+class CokluIslemKalemPayload(BaseModel):
+    islem_tipi: str
+    islem_detayi: str
+    has_altin: float = 0.0
+    tl_tutar: float = 0.0
+
+class ToptanciCokluIslemPayload(BaseModel):
+    aciklama: str | None = None
+    kalemler: list[CokluIslemKalemPayload]
+
+@app.get("/toptancilar")
+def toptanci_listesi():
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                t.id, t.unvan, t.telefon, t.aciklama, t.olusturulma_tarihi,
+                COALESCE(SUM(ti.has_altin), 0) AS bakiye_has,
+                COALESCE(SUM(ti.tl_tutar), 0) AS bakiye_tl
+            FROM toptancilar t
+            LEFT JOIN toptanci_islemler ti ON t.id = ti.toptanci_id
+            GROUP BY t.id
+            ORDER BY t.unvan ASC
+        """)
+        rows = cursor.fetchall()
+        
+        toptancilar = []
+        for r in rows:
+            toptancilar.append({
+                "id": r[0], "unvan": r[1], "telefon": r[2], "aciklama": r[3],
+                "olusturulma_tarihi": r[4], "bakiye_has": float(r[5]), "bakiye_tl": float(r[6])
+            })
+        return toptancilar
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.post("/toptancilar")
+def toptanci_ekle(payload: ToptanciPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO toptancilar (unvan, telefon, aciklama) VALUES (%s, %s, %s) RETURNING id",
+            (payload.unvan, payload.telefon, payload.aciklama)
+        )
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+        return {"mesaj": "Toptancı eklendi", "id": new_id}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.delete("/toptancilar/{toptanci_id}")
+def toptanci_sil(toptanci_id: int):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM toptancilar WHERE id = %s", (toptanci_id,))
+        conn.commit()
+        return {"mesaj": "Toptancı silindi"}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.get("/toptancilar/{toptanci_id}/islemler")
+def toptanci_islemleri_getir(toptanci_id: int):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        # Önce toptancı bilgilerini çek
+        cursor.execute("""
+            SELECT id, unvan, telefon, aciklama,
+                   (SELECT COALESCE(SUM(has_altin),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_has,
+                   (SELECT COALESCE(SUM(tl_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_tl
+            FROM toptancilar WHERE id = %s
+        """, (toptanci_id, toptanci_id, toptanci_id))
+        t_row = cursor.fetchone()
+        if not t_row:
+            raise HTTPException(status_code=404, detail="Toptancı bulunamadı")
+            
+        toptanci = {
+            "id": t_row[0], "unvan": t_row[1], "telefon": t_row[2], "aciklama": t_row[3],
+            "bakiye_has": float(t_row[4]), "bakiye_tl": float(t_row[5])
+        }
+
+        # Sonra işlemlerini çek
+        cursor.execute("""
+            SELECT id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama, islem_tarihi
+            FROM toptanci_islemler
+            WHERE toptanci_id = %s
+            ORDER BY islem_tarihi DESC
+        """, (toptanci_id,))
+        
+        islemler = []
+        for r in cursor.fetchall():
+            islemler.append({
+                "id": r[0], "islem_tipi": r[1], "islem_detayi": r[2],
+                "has_altin": float(r[3]), "tl_tutar": float(r[4]),
+                "aciklama": r[5], "islem_tarihi": r[6]
+            })
+            
+        return {"toptanci": toptanci, "islemler": islemler}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.post("/toptancilar/{toptanci_id}/islemler")
+def toptanci_islem_ekle(toptanci_id: int, payload: ToptanciIslemPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # Eğer Borçlanma (Mal Alış) ise borç (+) yazılır (Kuyumcunun borcu artar)
+        # Ödeme ise borç (-) yazılır (Kuyumcunun borcu azalır)
+        # Frontend direk + veya - gönderecek şekilde tasarlanabilir ama biz burada
+        # backend tarafında güvenliği sağlamak için işaretleri belirleyebiliriz.
+        # Basitlik için frontend'den her zaman mutlak değer (pozitif) geldiğini varsayalım.
+        
+        has_val = abs(payload.has_altin)
+        tl_val = abs(payload.tl_tutar)
+        
+        if payload.islem_tipi == "Ödeme":
+            has_val = -has_val
+            tl_val = -tl_val
+            
+        cursor.execute("""
+            INSERT INTO toptanci_islemler (toptanci_id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+        """, (toptanci_id, payload.islem_tipi, payload.islem_detayi, has_val, tl_val, payload.aciklama))
+        
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+        return {"mesaj": "İşlem kaydedildi", "id": new_id}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.post("/toptancilar/{toptanci_id}/coklu_islemler")
+def toptanci_coklu_islem_ekle(toptanci_id: int, payload: ToptanciCokluIslemPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        for kalem in payload.kalemler:
+            has_val = abs(kalem.has_altin)
+            tl_val = abs(kalem.tl_tutar)
+            if kalem.islem_tipi == "Ödeme":
+                has_val = -has_val
+                tl_val = -tl_val
+                
+            cursor.execute("""
+                INSERT INTO toptanci_islemler (toptanci_id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (toptanci_id, kalem.islem_tipi, kalem.islem_detayi, has_val, tl_val, payload.aciklama))
+            
+        conn.commit()
+        return {"mesaj": f"{len(payload.kalemler)} adet işlem kaydedildi."}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.delete("/toptanci_islemler/{islem_id}")
+def toptanci_islem_sil(islem_id: int):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM toptanci_islemler WHERE id = %s", (islem_id,))
+        conn.commit()
+        return {"mesaj": "İşlem silindi"}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
         if conn: conn.close()

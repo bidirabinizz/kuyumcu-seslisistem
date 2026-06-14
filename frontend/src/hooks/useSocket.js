@@ -1,19 +1,28 @@
-// hooks/useSocket.js — Refaktör: odeme_tipi, kategori, adet alanları eklendi.
+// hooks/useSocket.js — Refaktör: odeme_tipi, kategori, adet, doviz_tutar, doviz_kuru alanları eklendi.
 // mapApiIslem genişletildi; useMarket hook'u ayrıştırıldı.
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { API_BASE } from '../apiConfig';
 
-export const useSocket = (url) => {
+export const useSocket = (url, dateFilter) => {
   const [islemler, setIslemler]     = useState([]);
   const [toplamHas, setToplamHas]   = useState(0);
+  const [toplamTl, setToplamTl]     = useState(0);
+  const [toplamUsd, setToplamUsd]   = useState(0);
+  const [toplamEur, setToplamEur]   = useState(0);
   const [connected, setConnected]   = useState(false);
   const [loading, setLoading]       = useState(true);
-  const [voiceState, setVoiceState] = useState({ state: 'IDLE', islem: null, mesaj: null });
   const [lastTx, setLastTx]         = useState(null);
 
   const wsRef    = useRef(null);
   const retryRef = useRef(null);
+  const dateFilterRef = useRef(dateFilter);
+
+  useEffect(() => {
+    dateFilterRef.current = dateFilter;
+  }, [dateFilter]);
+
+  const filterKey = dateFilter ? JSON.stringify(dateFilter) : '';
 
   // ── API yanıtını normalize eden fonksiyon ──────────────────────────────────
   const mapApiIslem = (row) => ({
@@ -33,27 +42,32 @@ export const useSocket = (url) => {
     personel_ad_soyad: row.personel_ad_soyad,
     personel_id:      row.personel_id,
     birim_fiyat:      Number(row.birim_fiyat || 0),
+    doviz_tutar:      Number(row.doviz_tutar || 0),
+    doviz_kuru:       Number(row.doviz_kuru || 1),
   });
 
   // ── İlk veri çekimi ───────────────────────────────────────────────────────
   const initialFetch = useCallback(async () => {
     try {
       setLoading(true);
-      const res  = await fetch(`${API_BASE}/islemler?gunler=30&limit=15`);
+      const params = new URLSearchParams();
+      if (dateFilter && (dateFilter.type === 'today' || dateFilter.type === 'week' || dateFilter.type === 'custom')) {
+        if (dateFilter.start) params.append('start_date', dateFilter.start);
+        if (dateFilter.end) params.append('end_date', dateFilter.end);
+      }
+      
+      const res  = await fetch(`${API_BASE}/islemler?${params.toString()}`);
       const data = await res.json();
       if (res.ok) {
         const normalized = data.map(mapApiIslem);
         setIslemler(normalized);
-        setToplamHas(
-          normalized.reduce((s, i) => i.tip === 'ALIS' ? s + i.has : s - i.has, 0)
-        );
       }
     } catch (err) {
       console.error('İlk veriler çekilemedi:', err);
     } finally {
       setLoading(false);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── WebSocket bağlantısı ──────────────────────────────────────────────────
   const connect = useCallback(() => {
@@ -73,47 +87,35 @@ export const useSocket = (url) => {
         try {
           const data = JSON.parse(e.data);
 
-          // 1. Ses asistanı durum güncellemesi
-          if (data.type === 'VOICE_STATE') {
-            setVoiceState({ state: data.state, islem: data.islem, mesaj: data.mesaj });
-            return;
-          }
-
-          // 2. İşlem silme
+          // 1. İşlem silme
           if (data.type === 'UNDO_TX') {
             setIslemler(prev => prev.filter(i => i.id !== data.id));
-            setToplamHas(prev =>
-              data.tip === 'ALIS' ? prev - data.has : prev + data.has
-            );
             return;
           }
 
-          // 3. İşlem güncelleme
+          // 2. İşlem güncelleme
           if (data.type === 'UPDATE_TX') {
             setIslemler(prev =>
               prev.map(i => i.id === data.id
                 ? {
                     ...i,
-                    tip:       data.tip,
-                    ayar:      data.ayar,
-                    miktar:    Number(data.miktar || 0),
-                    adet:      Number(data.adet   || 1),
-                    has:       Number(data.has    || 0),
-                    odeme_tipi: data.odeme_tipi ?? i.odeme_tipi,
+                    tip:         data.tip,
+                    ayar:        data.ayar,
+                    miktar:      Number(data.miktar || 0),
+                    adet:        Number(data.adet   || 1),
+                    has:         Number(data.has    || 0),
+                    odeme_tipi:  data.odeme_tipi ?? i.odeme_tipi,
+                    doviz_tutar: Number(data.doviz_tutar || 0),
+                    doviz_kuru:  Number(data.doviz_kuru || 1),
+                    birim_fiyat: Number(data.birim_fiyat || 0),
                   }
                 : i
               )
             );
-            setToplamHas(prev => {
-              let g = prev;
-              g = data.eski_tip === 'ALIS' ? g - data.eski_has : g + data.eski_has;
-              g = data.tip      === 'ALIS' ? g + data.has      : g - data.has;
-              return g;
-            });
             return;
           }
 
-          // 4. Yeni işlem
+          // 3. Yeni işlem
           if (data.type === 'NEW_TX') {
             const yeniIslem = {
               id:               data.id,
@@ -130,12 +132,23 @@ export const useSocket = (url) => {
               personel_id:      data.personel_id,
               personel_ad_soyad: data.personel_ad_soyad || 'Sistem / Manuel',
               birim_fiyat:      Number(data.birim_fiyat || 0),
+              doviz_tutar:      Number(data.doviz_tutar || 0),
+              doviz_kuru:       Number(data.doviz_kuru || 1),
               uyari:            data.uyari ?? null,
             };
-            setIslemler(prev => [yeniIslem, ...prev].slice(0, 100));
-            setToplamHas(prev =>
-              data.tip === 'ALIS' ? prev + data.has : prev - data.has
-            );
+            
+            // Filtre uyumluluğunu kontrol et
+            let matchesFilter = true;
+            const currentFilter = dateFilterRef.current;
+            if (currentFilter && (currentFilter.type === 'today' || currentFilter.type === 'week' || currentFilter.type === 'custom')) {
+              const islemTarihi = yeniIslem.islem_tarihi?.split('T')[0];
+              if (currentFilter.start && islemTarihi < currentFilter.start) matchesFilter = false;
+              if (currentFilter.end && islemTarihi > currentFilter.end) matchesFilter = false;
+            }
+            
+            if (matchesFilter) {
+              setIslemler(prev => [yeniIslem, ...prev].slice(0, 100));
+            }
             setLastTx(yeniIslem);
           }
         } catch (err) {
@@ -153,6 +166,52 @@ export const useSocket = (url) => {
     } catch (_) {}
   }, [url]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Kasaları anlık ve otomatik hesapla ──────────────────────────────────────
+  useEffect(() => {
+    let has = 0;
+    let tl = 0;
+    let usd = 0;
+    let eur = 0;
+
+    islemler.forEach(i => {
+      // 1. Has Altın Hesabı
+      if (i.tip === 'ALIS') {
+        has += i.has;
+      } else {
+        has -= i.has;
+      }
+
+      const tutarTl = (i.miktar || 0) * (i.birim_fiyat || 0);
+      const dovizVal = Number(i.doviz_tutar || 0);
+
+      // 2. Nakit TL, Kart, USD, EUR Kasaları
+      if (i.odeme_tipi === 'NAKIT') {
+        if (i.tip === 'SATIS') {
+          tl += tutarTl;
+        } else {
+          tl -= tutarTl;
+        }
+      } else if (i.odeme_tipi === 'USD') {
+        if (i.tip === 'SATIS') {
+          usd += dovizVal;
+        } else {
+          usd -= dovizVal;
+        }
+      } else if (i.odeme_tipi === 'EUR') {
+        if (i.tip === 'SATIS') {
+          eur += dovizVal;
+        } else {
+          eur -= dovizVal;
+        }
+      }
+    });
+
+    setToplamHas(has);
+    setToplamTl(tl);
+    setToplamUsd(usd);
+    setToplamEur(eur);
+  }, [islemler]);
+
   useEffect(() => {
     initialFetch();
     connect();
@@ -162,5 +221,5 @@ export const useSocket = (url) => {
     };
   }, [connect, initialFetch]);
 
-  return { islemler, toplamHas, connected, loading, voiceState, lastTx, setLastTx };
+  return { islemler, toplamHas, toplamTl, toplamUsd, toplamEur, connected, loading, lastTx, setLastTx };
 };

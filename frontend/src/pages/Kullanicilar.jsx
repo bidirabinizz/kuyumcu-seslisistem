@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { UserPlus, Shield, Mic, Edit2, Trash2, X, Check } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { UserPlus, Shield, Edit2, Trash2, X, Check, AlertTriangle } from 'lucide-react';
+import { API_BASE } from '../apiConfig';
 
 const ROL_BADGE = {
   'Yönetici':   'bg-gold-100 text-gold-800 border-gold-200',
@@ -8,7 +9,6 @@ const ROL_BADGE = {
 };
 
 const BOSTA_PERSONEL = { ad_soyad: '', tetikleme_kelimesi: '', rol: 'Tezgahtar' };
-const API_BASE = 'http://localhost:8000';
 
 export const Kullanicilar = () => {
   const [personeller, setPersoneller] = useState([]);
@@ -19,19 +19,8 @@ export const Kullanicilar = () => {
   const [hata, setHata]             = useState('');
   const [istatistikler, setIstatistikler] = useState([]);
   const [seciliPerformans, setSeciliPerformans] = useState(null);
-  const [aktifPersoneller, setAktifPersoneller] = useState([]);
-
-  const aktifleriGetir = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/personeller/aktif`);
-      if (res.ok) {
-        const data = await res.json();
-        setAktifPersoneller(data);
-      }
-    } catch (err) {
-      console.warn('Aktif personel durumu alınamadı.', err);
-    }
-  };
+  // Silme modal state
+  const [silOnay, setSilOnay] = useState(null);  // null | { personel, loading, hata }
 
   const personelleriGetir = async () => {
     try {
@@ -64,14 +53,10 @@ export const Kullanicilar = () => {
   useEffect(() => {
     personelleriGetir();
     istatistikleriGetir();
-    aktifleriGetir();
-
-    const interval = setInterval(aktifleriGetir, 3000);
-    return () => clearInterval(interval);
   }, []);
 
   const kaydet = async () => {
-    if (!yeniP.ad_soyad || !yeniP.tetikleme_kelimesi) return;
+    if (!yeniP.ad_soyad) return;
     try {
       setHata('');
       const method = duzenleId !== null ? 'PUT' : 'POST';
@@ -79,10 +64,27 @@ export const Kullanicilar = () => {
         ? `${API_BASE}/personeller/${duzenleId}`
         : `${API_BASE}/personeller`;
 
+      // DB unique constraint'i bozmamak için arkada temiz bir tetikleme kelimesi oluştur
+      const cleanTrigger = yeniP.tetikleme_kelimesi || 
+        yeniP.ad_soyad
+          .toLowerCase()
+          .replace(/ı/g, 'i')
+          .replace(/ğ/g, 'g')
+          .replace(/ü/g, 'u')
+          .replace(/ş/g, 's')
+          .replace(/ö/g, 'o')
+          .replace(/ç/g, 'c')
+          .replace(/[^a-z0-9]/g, '') + Math.floor(Math.random() * 1000);
+
+      const payload = {
+        ...yeniP,
+        tetikleme_kelimesi: cleanTrigger
+      };
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(yeniP),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -105,18 +107,24 @@ export const Kullanicilar = () => {
     setFormAcik(true);
   };
 
-  const sil = async (id) => {
+  const sil = async (mod) => {
+    if (!silOnay) return;
+    setSilOnay(p => ({ ...p, loading: true, hata: '' }));
     try {
-      setHata('');
-      const res = await fetch(`${API_BASE}/personeller/${id}`, { method: 'DELETE' });
+      const res = await fetch(
+        `${API_BASE}/personeller/${silOnay.personel.id}?mod=${mod}`,
+        { method: 'DELETE' }
+      );
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data?.detail || 'Silme işlemi başarısız.');
+        setSilOnay(p => ({ ...p, loading: false, hata: data?.detail || 'Silme işlemi başarısız.' }));
+        return;
       }
+      setSilOnay(null);
       await personelleriGetir();
       await istatistikleriGetir();
-    } catch (err) {
-      setHata(err.message || 'Silme işlemi başarısız.');
+    } catch {
+      setSilOnay(p => ({ ...p, loading: false, hata: 'Sunucu bağlantı hatası.' }));
     }
   };
 
@@ -126,7 +134,7 @@ export const Kullanicilar = () => {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
         <div>
           <h1 className="font-display text-2xl font-black text-ink-900 tracking-tight">Personel Yönetimi</h1>
-          <p className="text-sm text-ink-400 mt-0.5">Sesli komut yetkisi olan çalışanlar</p>
+          <p className="text-sm text-ink-400 mt-0.5">Mağaza çalışanları ve yetkileri</p>
         </div>
         <button
           onClick={() => { setFormAcik(true); setDuzenleId(null); setYeniP(BOSTA_PERSONEL); }}
@@ -158,19 +166,6 @@ export const Kullanicilar = () => {
                   value={yeniP.ad_soyad}
                   onChange={e => setYeniP(p => ({ ...p, ad_soyad: e.target.value }))}
                 />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-ink-500 uppercase tracking-wider block mb-1.5">Sesli Tetikleme Kelimesi</label>
-                <div className="relative">
-                  <Mic size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-400" />
-                  <input
-                    className="w-full border border-ink-200 rounded-xl pl-9 pr-4 py-2.5 text-sm font-mono font-bold text-ink-800 outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-100 transition-all"
-                    placeholder="ahmet"
-                    value={yeniP.tetikleme_kelimesi}
-                    onChange={e => setYeniP(p => ({ ...p, tetikleme_kelimesi: e.target.value.toLowerCase() }))}
-                  />
-                </div>
-                <p className="text-xs text-ink-400 mt-1">Küçük harf, boşluksuz</p>
               </div>
               <div>
                 <label className="text-xs font-bold text-ink-500 uppercase tracking-wider block mb-1.5">Rol</label>
@@ -216,102 +211,64 @@ export const Kullanicilar = () => {
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-  {personeller.map((p) => {
-    // YENİ: Bu personel şu an WebSocket'e bağlı mı?
-    const isAktif = aktifPersoneller.includes(p.id);
-
+        {personeller.map((p) => {
+    const s = istatistikler.find((x) => x.id === p.id);
     return (
-      <div key={p.id} className={`bg-white border ${isAktif ? 'border-green-300 shadow-md' : 'border-ink-100 shadow-sm'} rounded-2xl p-5 hover:shadow-md transition-all group relative`}>
-        {(() => {
-          const s = istatistikler.find((x) => x.id === p.id);
-          return (
-            <>
-              {/* Kart Başlığı ve İkon */}
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-ink-800 flex items-center justify-center shadow-md relative">
-                    <Shield size={20} className="text-gold-400" />
-                    
-                    {/* AKTİF SİNYALİ (Yeşil yanan nokta) */}
-                    {isAktif && (
-                      <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-4 w-4 bg-green-500 border-2 border-white"></span>
-                      </span>
-                    )}
-                  </div>
-                  
-                  {/* AKTİF ROZETİ */}
-                  {isAktif ? (
-                    <span className="bg-green-50 text-green-700 border border-green-200 text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-lg flex items-center gap-1.5 transition-all">
-                      <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                      Sisteme Bağlı
-                    </span>
-                  ) : (
-                    <span className="bg-ink-50 text-red-500 border border-ink-200 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-lg flex items-center gap-1.5 transition-all">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>
-                      Bağlı Değil
-                    </span>
-                  )}
-                </div>
-
-                {/* Aksiyon Butonları (Düzenle/Sil) */}
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => duzenle(p)}
-                    className="w-8 h-8 rounded-lg bg-ink-50 hover:bg-ink-100 flex items-center justify-center text-ink-500 transition-all"
-                  >
-                    <Edit2 size={13} />
-                  </button>
-                  <button
-                    onClick={() => sil(p.id)}
-                    className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-500 transition-all"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Geri Kalan Bilgiler (Mevcut kodunla aynı) */}
-              <h3 className="font-display text-lg font-bold text-ink-900 leading-tight">{p.ad_soyad}</h3>
-              
-              <span className={`inline-block mt-1 mb-4 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold ${ROL_BADGE[p.rol] || 'bg-ink-100 text-ink-700 border-ink-200'}`}>
-                {p.rol}
-              </span>
-
-            <div className="bg-ink-50 border border-dashed border-ink-200 rounded-xl p-3">
-              <div className="flex items-center gap-1.5 mb-1">
-                <Mic size={11} className="text-ink-400" />
-                <span className="text-[10px] font-bold text-ink-400 uppercase tracking-wider">Sesli Tetikleme</span>
-              </div>
-              <span className="font-mono font-black text-ink-800 text-sm">"{p.tetikleme_kelimesi}"</span>
+      <div key={p.id} className="bg-white border border-ink-100 shadow-sm rounded-2xl p-5 hover:shadow-md transition-all group relative">
+        {/* Kart Başlığı ve İkon */}
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-ink-800 flex items-center justify-center shadow-md relative">
+              <Shield size={20} className="text-gold-400" />
             </div>
-
-            <div className="mt-3 rounded-xl border border-gold-100 bg-gold-50 p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-gold-700">Performans</span>
-                <span className="px-2 py-0.5 rounded-md bg-white border border-gold-200 text-[11px] font-black text-gold-800">
-                  {(s?.performans_skor ?? 0).toFixed(1)}
-                </span>
-              </div>
-              <div className="text-xs text-ink-600 space-y-1">
-                <p>Alış Has: {(s?.toplam_alis_has ?? 0).toFixed(3)} gr</p>
-                <p>Satış Has: {(s?.toplam_satis_has ?? 0).toFixed(3)} gr</p>
-                <p>İşlem: {s?.islem_sayisi ?? 0} adet</p>
-              </div>
-              <button
-                onClick={() => setSeciliPerformans({ personel: p, stats: s })}
-                className="mt-2 w-full rounded-lg bg-ink-800 text-white text-xs font-bold py-2 hover:bg-ink-900 transition-all"
-              >
-                Performansı Gör
-              </button>
-            </div>
-                </>
-              );
-            })()}
           </div>
+
+          {/* Aksiyon Butonları (Düzenle/Sil) */}
+          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => duzenle(p)}
+              className="w-8 h-8 rounded-lg bg-ink-50 hover:bg-ink-100 flex items-center justify-center text-ink-500 transition-all"
+            >
+              <Edit2 size={13} />
+            </button>
+            <button
+              onClick={() => setSilOnay({ personel: p, loading: false, hata: '' })}
+              className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-500 transition-all"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        </div>
+
+        {/* Geri Kalan Bilgiler */}
+        <h3 className="font-display text-lg font-bold text-ink-900 leading-tight">{p.ad_soyad}</h3>
+        
+        <span className={`inline-block mt-1 mb-4 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold ${ROL_BADGE[p.rol] || 'bg-ink-100 text-ink-700 border-ink-200'}`}>
+          {p.rol}
+        </span>
+
+        <div className="mt-3 rounded-xl border border-gold-100 bg-gold-50 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gold-700">Performans</span>
+            <span className="px-2 py-0.5 rounded-md bg-white border border-gold-200 text-[11px] font-black text-gold-800">
+              {(s?.performans_skor ?? 0).toFixed(1)}
+            </span>
+          </div>
+          <div className="text-xs text-ink-600 space-y-1">
+            <p>Alış Has: {(s?.toplam_alis_has ?? 0).toFixed(3)} gr</p>
+            <p>Satış Has: {(s?.toplam_satis_has ?? 0).toFixed(3)} gr</p>
+            <p>İşlem: {s?.islem_sayisi ?? 0} adet</p>
+          </div>
+          <button
+            onClick={() => setSeciliPerformans({ personel: p, stats: s })}
+            className="mt-2 w-full rounded-lg bg-ink-800 text-white text-xs font-bold py-2 hover:bg-ink-900 transition-all"
+          >
+            Performansı Gör
+          </button>
+        </div>
+      </div>
     );
-        })}
+  })}
       </div>
 
       {seciliPerformans && (
@@ -351,6 +308,92 @@ export const Kullanicilar = () => {
                 <p className="font-mono font-black text-gold-900">{(seciliPerformans.stats?.performans_skor ?? 0).toFixed(1)} / 100</p>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Silme Modalı */}
+      {silOnay && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 relative">
+
+            {/* Sıfla X butonu — sağ üst */}
+            <button
+              onClick={() => setSilOnay(null)}
+              className="absolute top-4 right-4 w-8 h-8 rounded-lg text-ink-400 hover:text-ink-700 hover:bg-ink-50 flex items-center justify-center transition-all"
+            >
+              <X size={18} />
+            </button>
+
+            {/* Başlık */}
+            <div className="flex items-center gap-3 mb-5 pr-8">
+              <div className="w-11 h-11 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 size={20} className="text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-lg text-ink-900 leading-tight">
+                  Personeli Sil
+                </h3>
+                <p className="text-xs text-ink-400 mt-0.5">{silOnay.personel.ad_soyad}</p>
+              </div>
+            </div>
+
+            {/* Hata mesajı */}
+            {silOnay.hata && (
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4 leading-relaxed">
+                {silOnay.hata}
+              </p>
+            )}
+
+            {/* Açıklama */}
+            <p className="text-sm text-ink-600 mb-5">
+              Personeli silmek için aşağıdaki seçeneklerden birini seçin:
+            </p>
+
+            {/* Seçenek 1: İşlemleri de sil */}
+            <button
+              onClick={() => sil('cascade')}
+              disabled={silOnay.loading}
+              className="w-full mb-3 px-4 py-3.5 rounded-xl border-2 border-red-200 bg-red-50 hover:bg-red-100 hover:border-red-300 text-left transition-all disabled:opacity-50 group"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-red-800 text-sm">🗑️ İşlemlerle Birlikte Sil</p>
+                  <p className="text-xs text-red-600 mt-0.5">
+                    Personele ait tüm kasa işlemleri de kalıcı olarak silinir
+                  </p>
+                </div>
+                {silOnay.loading && (
+                  <span className="inline-block w-4 h-4 border-2 border-red-300 border-t-red-600 rounded-full animate-spin ml-3" />
+                )}
+              </div>
+            </button>
+
+            {/* Seçenek 2: İşlemleri anonim bırak */}
+            <button
+              onClick={() => sil('detach')}
+              disabled={silOnay.loading}
+              className="w-full mb-4 px-4 py-3.5 rounded-xl border-2 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 text-left transition-all disabled:opacity-50"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-amber-800 text-sm">💾 İşlemleri Tut, Kullanıcıyı Sil</p>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    Geçmiş işlemler korunur, personel adı "Anonim" olarak güncellenir
+                  </p>
+                </div>
+                {silOnay.loading && (
+                  <span className="inline-block w-4 h-4 border-2 border-amber-300 border-t-amber-600 rounded-full animate-spin ml-3" />
+                )}
+              </div>
+            </button>
+
+            {/* İptal */}
+            <button
+              onClick={() => setSilOnay(null)}
+              className="w-full py-2.5 border border-ink-200 text-ink-600 font-bold rounded-xl text-sm hover:bg-ink-50 transition-all"
+            >
+              İptal
+            </button>
           </div>
         </div>
       )}

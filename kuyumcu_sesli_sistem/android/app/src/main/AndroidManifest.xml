@@ -22,11 +22,6 @@
             </intent-filter>
         </activity>
 
-        <!-- flutter_foreground_task: Arka plan servisi -->
-        <service
-            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-            android:foregroundServiceType="microphone"
-            android:exported="false" />
 
         <meta-data
             android:name="flutterEmbedding"
@@ -41,13 +36,8 @@
     </queries>
 
     <!-- Temel izinler -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- UDP broadcast için ağ izni -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <!-- Wake Lock: CPU uykuya geçmesin -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
 </manifest>
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Wifi, Copy, CheckCircle } from 'lucide-react';
+import { API_BASE } from '../apiConfig';
 
 const NetworkInfo = () => {
     const [ip, setIp] = useState('Yükleniyor...');
@@ -7,7 +8,7 @@ const NetworkInfo = () => {
 
     useEffect(() => {
         // Backend'den IP adresini çek
-        fetch('http://localhost:8000/sistem/ip')
+        fetch(`${API_BASE}/sistem/ip`)
             .then(res => res.json())
             .then(data => setIp(data.ip))
             .catch(err => setIp('Hata!'));
