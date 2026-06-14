@@ -18,13 +18,27 @@ import xml.etree.ElementTree as ET
 # ─────────────────────────────────────────────
 # AYARLAR
 # ─────────────────────────────────────────────
-DB_CONFIG = {
-    "dbname": "kuyumcu_erp",
-    "user": "postgres",
-    "password": "Baha0327.",
-    "host": "localhost",
-    "port": "5432",
-}
+from urllib.parse import urlparse
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if DATABASE_URL:
+    result = urlparse(DATABASE_URL)
+    DB_CONFIG = {
+        "dbname": result.path[1:],
+        "user": result.username,
+        "password": result.password,
+        "host": result.hostname,
+        "port": str(result.port or 5432),
+    }
+else:
+    DB_CONFIG = {
+        "dbname": "kuyumcu_erp",
+        "user": "postgres",
+        "password": "Baha0327.",
+        "host": "localhost",
+        "port": "5432",
+    }
 
 # Mevcut MILYEM_MAP aynen kalıyor
 MILYEM_MAP = {
@@ -320,6 +334,39 @@ def db_tablolari_hazirla():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
+        
+        # 1. Personeller Tablosu
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS personeller (
+                id                 SERIAL PRIMARY KEY,
+                ad_soyad           VARCHAR(100) NOT NULL,
+                tetikleme_kelimesi VARCHAR(100) NOT NULL UNIQUE,
+                rol                VARCHAR(50) DEFAULT 'PERSONEL'
+            )
+        """)
+        
+        # 2. Islemler Tablosu
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS islemler (
+                id              SERIAL PRIMARY KEY,
+                personel_id     INTEGER REFERENCES personeller(id) ON DELETE RESTRICT,
+                islem_tipi      VARCHAR(50) NOT NULL,
+                urun_kategorisi VARCHAR(100) DEFAULT 'ALTIN',
+                islem_birimi    VARCHAR(50) DEFAULT 'GRAM',
+                urun_cinsi      VARCHAR(100) NOT NULL,
+                brut_miktar     NUMERIC(15,4) NOT NULL,
+                milyem          NUMERIC(8,4) DEFAULT 0,
+                birim_fiyat     NUMERIC(15,2) NOT NULL,
+                net_has_miktar  NUMERIC(15,4) NOT NULL,
+                odeme_tipi      VARCHAR(50) DEFAULT 'NAKIT',
+                adet            INTEGER DEFAULT 1,
+                doviz_tutar     NUMERIC(15,2) DEFAULT 0,
+                doviz_kuru      NUMERIC(10,4) DEFAULT 1,
+                islem_tarihi    TIMESTAMP DEFAULT NOW()
+            )
+        """)
+
+        # 3. Urunler Tablosu
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS urunler (
                 id              SERIAL PRIMARY KEY,
@@ -338,7 +385,8 @@ def db_tablolari_hazirla():
         cursor.execute("""
             ALTER TABLE urunler ADD COLUMN IF NOT EXISTS urun_grubu VARCHAR(100) DEFAULT 'Diğer';
         """)
-        # Günlük kurlar tablosu
+        
+        # 4. Günlük Kurlar Tablosu
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS gunluk_kurlar (
                 id                  SERIAL PRIMARY KEY,
@@ -348,14 +396,16 @@ def db_tablolari_hazirla():
                 guncellenme_tarihi  TIMESTAMP DEFAULT NOW()
             )
         """)
-        # islemler tablosuna döviz kolonları ekle (yoksa)
+        
+        # Geriye dönük uyumluluk ve güvenli alter işlemleri
         cursor.execute("""
             ALTER TABLE islemler ADD COLUMN IF NOT EXISTS doviz_tutar NUMERIC(15,2) DEFAULT 0;
         """)
         cursor.execute("""
             ALTER TABLE islemler ADD COLUMN IF NOT EXISTS doviz_kuru NUMERIC(10,4) DEFAULT 1;
         """)
-        # Kategoriler tablosunu oluştur
+        
+        # 5. Kategoriler Tablosu
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS kategoriler (
                 id      SERIAL PRIMARY KEY,
@@ -366,6 +416,7 @@ def db_tablolari_hazirla():
                 aktif   BOOLEAN      DEFAULT TRUE
             )
         """)
+        
         # Kategoriler tablosunu varsayılan değerlerle seed et (yoksa)
         cursor.execute("SELECT COUNT(*) FROM kategoriler")
         kat_count = cursor.fetchone()[0]
@@ -380,13 +431,14 @@ def db_tablolari_hazirla():
                 varsayilan_kategoriler
             )
             print(f"[DB] {len(varsayilan_kategoriler)} varsayılan kategori eklendi.")
+            
         # urunler tablosunda urun_kategorisi kolonu VARCHAR(100) genişlet
         cursor.execute("""
             ALTER TABLE urunler 
             ALTER COLUMN urun_kategorisi TYPE VARCHAR(100);
         """)
 
-        # Toptancılar Tablosu
+        # 6. Toptancılar Tablosu
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS toptancilar (
                 id                 SERIAL PRIMARY KEY,
@@ -397,7 +449,7 @@ def db_tablolari_hazirla():
             )
         """)
 
-        # Toptancı İşlemler Tablosu
+        # 7. Toptancı İşlemler Tablosu
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS toptanci_islemler (
                 id                 SERIAL PRIMARY KEY,
@@ -411,6 +463,17 @@ def db_tablolari_hazirla():
             )
         """)
 
+        # 8. Personeller Seed
+        cursor.execute("SELECT COUNT(*) FROM personeller")
+        p_count = cursor.fetchone()[0]
+        if p_count == 0:
+            cursor.execute(
+                "INSERT INTO personeller (ad_soyad, tetikleme_kelimesi, rol) VALUES (%s, %s, %s)",
+                ("Yönetici", "yönetici", "Yönetici")
+            )
+            print("[DB] Varsayılan personel eklendi.")
+
+        # 9. Ürünler Seed
         cursor.execute("SELECT COUNT(*) FROM urunler")
         count = cursor.fetchone()[0]
         if count == 0:
