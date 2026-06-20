@@ -1799,9 +1799,13 @@ def generate_pdf_report(
         pdf.add_page()
 
         font_candidates = [
+            os.path.join(os.path.dirname(__file__), "DejaVuSans.ttf"),
             r"C:\Windows\Fonts\arial.ttf",
             r"C:\Windows\Fonts\Arial.ttf",
             r"C:\Windows\Fonts\calibri.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
         ]
         font_path = next((p for p in font_candidates if os.path.exists(p)), None)
         if not font_path:
@@ -2252,9 +2256,13 @@ def generate_toptanci_pdf_report(
         pdf.add_page()
         
         font_candidates = [
+            os.path.join(os.path.dirname(__file__), "DejaVuSans.ttf"),
             r"C:\Windows\Fonts\arial.ttf",
             r"C:\Windows\Fonts\Arial.ttf",
             r"C:\Windows\Fonts\calibri.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
         ]
         font_path = next((p for p in font_candidates if os.path.exists(p)), None)
         if not font_path:
