@@ -456,7 +456,7 @@ export const ToptanciDetay = () => {
       }
 
       // Brüt veya Milyem değiştiyse Has Altın hesapla
-      if ((field === 'brut' || field === 'milyem') && updated.urun_kategorisi === 'ALTIN') {
+      if ((field === 'brut' || field === 'milyem') && updated.urun_kategorisi !== 'SARRAFIYE' && updated.urun_kategorisi !== 'NAKIT' && updated.urun_kategorisi !== 'PIRLANTA') {
         const b = parseFloat(updated.brut) || 0;
         const m = parseFloat(updated.milyem) || 0;
         updated.has_altin = (b * m).toFixed(3);
@@ -1766,10 +1766,17 @@ export const ToptanciDetay = () => {
                         goldIslemTipi = isCashDebt ? 'Borçlanma' : 'Ödeme';
                       }
 
+                      const miktarText = `${parseFloat(fikslemeMiktar).toFixed(3)} gr Has`;
+                      const tutarFormatted = (parseFloat(fikslemeTutar) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 });
+                      const tutarText = `${tutarFormatted} ${fikslemeParaBirimi}`;
+                      const gramFiyatiText = `${parseFloat(fikslemeGramFiyat).toFixed(2)} ${fikslemeParaBirimi}`;
+                      const dovizKuruText = fikslemeParaBirimi !== 'TRY' ? ` | Döviz Kuru: ${parseFloat(fikslemeDovizKuru).toFixed(4)}` : '';
+                      const islemAciklamasi = `Kur Kesme / Fiksleme [Bağlantı: ${miktarText} ➔ ${tutarText}${dovizKuruText} | 1 gr = ${gramFiyatiText}]`;
+
                       const islem1 = {
                         id: Date.now() + Math.random(),
                         islem_tipi: goldIslemTipi,
-                        islem_detayi: 'Kur Kesme / Fiksleme',
+                        islem_detayi: islemAciklamasi,
                         urun: '24 Ayar Has',
                         urun_kodu: '24_AYAR',
                         urun_kategorisi: 'ALTIN',
@@ -1786,7 +1793,7 @@ export const ToptanciDetay = () => {
                       const islem2 = {
                         id: Date.now() + Math.random(),
                         islem_tipi: cashIslemTipi,
-                        islem_detayi: 'Kur Kesme / Fiksleme',
+                        islem_detayi: islemAciklamasi,
                         urun: 'Nakit/TL',
                         urun_kodu: 'NAKIT_TL',
                         urun_kategorisi: 'NAKIT',
@@ -2253,8 +2260,8 @@ export const ToptanciDetay = () => {
                           </span>
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono font-bold whitespace-nowrap">
-                          {product.urun_kategorisi === 'ALTIN' ? product.milyem.toFixed(4) :
-                           product.urun_kategorisi === 'SARRAFIYE' ? `${product.has_karsiligi.toFixed(4)} gr` :
+                          {product.milyem > 0 ? product.milyem.toFixed(4) :
+                           product.has_karsiligi > 0 ? `${product.has_karsiligi.toFixed(4)} gr` :
                            '—'}
                         </td>
                       </tr>

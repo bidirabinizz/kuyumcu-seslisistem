@@ -151,6 +151,109 @@ def _udp_broadcast_listener():
             except Exception as e:
                 print(f"[UDP] Hata: {e}")
 
+_kurlar_stop_event = threading.Event()
+
+def _fetch_rates_from_cloudflare_worker():
+    url = "https://altin-tunnel.siper2710.workers.dev/"
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data_raw = resp.read()
+    result = json.loads(data_raw.decode('utf-8'))
+    items = result.get("data", [])
+    
+    usd = None
+    eur = None
+    gold = None
+    
+    for item in items:
+        sym = item.get("symbol", "").upper().strip()
+        bid = float(item.get("bid") or 0)
+        ask = float(item.get("ask") or 0)
+        val = ask if ask > 0 else bid
+        
+        if sym in ["USDTRY", "DS_USDTRY"]:
+            usd = val
+        elif sym in ["EURTRY", "DS_EURTRY"]:
+            eur = val
+        elif sym in ["ALTIN", "DS_ALTIN"]:
+            gold = val
+            
+    if not usd or not eur or not gold:
+        for item in items:
+            sym = item.get("symbol", "").upper().strip()
+            bid = float(item.get("bid") or 0)
+            ask = float(item.get("ask") or 0)
+            val = ask if ask > 0 else bid
+            if "USDTRY" in sym and not usd:
+                usd = val
+            elif "EURTRY" in sym and not eur:
+                eur = val
+            elif "ALTIN" in sym and not gold:
+                gold = val
+                
+    return usd, eur, gold
+
+def _auto_update_kurlar_listener():
+    print("[KURLAR] Otomatik kur güncelleme servisi başlatıldı.")
+    time.sleep(5) # Veritabanı ve tablolar hazır olana kadar bekle
+    while not _kurlar_stop_event.is_set():
+        try:
+            usd, eur, gold = _fetch_rates_from_cloudflare_worker()
+            if usd and eur and gold:
+                # DB'yi güncelle
+                conn = psycopg2.connect(**DB_CONFIG)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM gunluk_kurlar")
+                count = cursor.fetchone()[0]
+                if count == 0:
+                    cursor.execute(
+                        "INSERT INTO gunluk_kurlar (usd_try, eur_try, gram_altin_24k_try) VALUES (%s, %s, %s)",
+                        (usd, eur, gold)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE gunluk_kurlar SET usd_try = %s, eur_try = %s, gram_altin_24k_try = %s, guncellenme_tarihi = NOW()",
+                        (usd, eur, gold)
+                    )
+                conn.commit()
+                cursor.close()
+                conn.close()
+                
+                # Cache ve trendleri güncelle
+                global _market_cache_data, _market_cache_prev_data, _market_cache_ts
+                with _market_cache_lock:
+                    if _market_cache_data is None:
+                        _market_cache_prev_data = {
+                            "usd_try": usd,
+                            "eur_try": eur,
+                            "gram_altin_24k_try": gold
+                        }
+                    elif (
+                        _market_cache_data.get("usd_try") != usd or
+                        _market_cache_data.get("eur_try") != eur or
+                        _market_cache_data.get("gram_altin_24k_try") != gold
+                    ):
+                        _market_cache_prev_data = _market_cache_data
+                    
+                    _market_cache_data = {
+                        "usd_try": usd,
+                        "eur_try": eur,
+                        "gram_altin_24k_try": gold,
+                        "guncellenme_ts": int(time.time()),
+                        "kaynak": "Cloudflare Worker (Otomatik)",
+                    }
+                    _market_cache_ts = time.time()
+                
+                print(f"[KURLAR] Kurlar otomatik güncellendi - USD: {usd}, EUR: {eur}, Altın: {gold}")
+        except Exception as e:
+            print(f"[KURLAR] Kurlar güncellenirken hata: {e}")
+            
+        # 10 saniyede bir kontrol et
+        for _ in range(10):
+            if _kurlar_stop_event.is_set():
+                break
+            time.sleep(1)
+
 # UYGULAMA YAŞAM DÖNGÜSÜ
 # ─────────────────────────────────────────────
 @asynccontextmanager
@@ -170,10 +273,16 @@ async def lifespan(app: FastAPI):
     udp_thread = threading.Thread(target=_udp_broadcast_listener, daemon=True)
     udp_thread.start()
 
+    # Otomatik Kur Güncelleme servisi — daemon thread olarak başlat
+    _kurlar_stop_event.clear()
+    kurlar_thread = threading.Thread(target=_auto_update_kurlar_listener, daemon=True)
+    kurlar_thread.start()
+
     yield
 
     # Temizlik
     _udp_stop_event.set()
+    _kurlar_stop_event.set()
 
 
 app = FastAPI(title="Kuyumcu ERP API", lifespan=lifespan)
@@ -270,6 +379,7 @@ class UrunPayload(BaseModel):
     sira: int = 0
     aktif: bool = True
     urun_grubu: str | None = "Diğer"
+    mobil_aktif: bool = True
 
 
 class KategoriPayload(BaseModel):
@@ -298,6 +408,7 @@ class UrunGuncellePayload(BaseModel):
     sira: int | None = None
     aktif: bool | None = None
     urun_grubu: str | None = None
+    mobil_aktif: bool | None = None
 
 
 def normalize_tetikleme_kelimesi(kelime: str) -> str:
@@ -425,17 +536,30 @@ def db_tablolari_hazirla():
                 ('ALTIN',    '🥇 Altın',    'yellow', 1),
                 ('SARRAFIYE','🪙 Sarrafiye', 'amber',  2),
                 ('PIRLANTA', '💎 Pırlanta', 'purple', 3),
+                ('DÖVİZ',    '💵 Döviz',    'emerald', 4),
             ]
             cursor.executemany(
                 "INSERT INTO kategoriler (ad, etiket, renk, sira) VALUES (%s, %s, %s, %s)",
                 varsayilan_kategoriler
             )
             print(f"[DB] {len(varsayilan_kategoriler)} varsayılan kategori eklendi.")
+        
+        # Her durumda DÖVİZ kategorisinin var olduğundan emin ol
+        cursor.execute("INSERT INTO kategoriler (ad, etiket, renk, sira) VALUES ('DÖVİZ', '💵 Döviz', 'emerald', 4) ON CONFLICT (ad) DO NOTHING;")
             
         # urunler tablosunda urun_kategorisi kolonu VARCHAR(100) genişlet
         cursor.execute("""
             ALTER TABLE urunler 
             ALTER COLUMN urun_kategorisi TYPE VARCHAR(100);
+        """)
+        cursor.execute("""
+            ALTER TABLE urunler ADD COLUMN IF NOT EXISTS mobil_aktif BOOLEAN DEFAULT TRUE;
+        """)
+
+        # toptanci_islemler tablosunda islem_detayi kolonu VARCHAR(250) genişlet
+        cursor.execute("""
+            ALTER TABLE toptanci_islemler 
+            ALTER COLUMN islem_detayi TYPE VARCHAR(250);
         """)
 
         # 6. Toptancılar Tablosu
@@ -455,7 +579,7 @@ def db_tablolari_hazirla():
                 id                 SERIAL PRIMARY KEY,
                 toptanci_id        INTEGER NOT NULL REFERENCES toptancilar(id) ON DELETE CASCADE,
                 islem_tipi         VARCHAR(50) NOT NULL, -- Örn: 'Borçlanma', 'Ödeme'
-                islem_detayi       VARCHAR(100),         -- Örn: 'Nakit Ödeme', 'Hurda Teslimi', 'Has Altın Teslimi', 'Mal Alış'
+                islem_detayi       VARCHAR(250),         -- Örn: 'Nakit Ödeme', 'Hurda Teslimi', 'Has Altın Teslimi', 'Mal Alış'
                 has_altin          NUMERIC(15,4) DEFAULT 0, -- Pozitif veya Negatif değer
                 tl_tutar           NUMERIC(15,2) DEFAULT 0, -- Pozitif veya Negatif değer
                 aciklama           TEXT,
@@ -496,6 +620,22 @@ def db_tablolari_hazirla():
                 varsayilan
             )
             print(f"[DB] {len(varsayilan)} varsayılan ürün eklendi.")
+        
+        # Her durumda Döviz ürünlerinin (USD, EUR) var olduğundan emin ol
+        cursor.execute("SELECT COUNT(*) FROM urunler WHERE urun_cinsi IN ('USD', 'EUR')")
+        doviz_products_count = cursor.fetchone()[0]
+        if doviz_products_count == 0:
+            doviz_urunler = [
+                ("Amerikan Doları (USD)", "USD", "DÖVİZ", "ADET", 0.0, 0.0, "emerald", 10),
+                ("Euro (EUR)",            "EUR", "DÖVİZ", "ADET", 0.0, 0.0, "emerald", 11),
+            ]
+            cursor.executemany(
+                """INSERT INTO urunler
+                   (ad, urun_cinsi, urun_kategorisi, islem_birimi, milyem, has_karsiligi, renk, sira)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                doviz_urunler
+            )
+            print("[DB] Döviz ürünleri (USD, EUR) eklendi.")
         conn.commit()
     finally:
         if cursor: cursor.close()
@@ -738,12 +878,12 @@ def urunleri_getir(hepsi: bool = False):
         if hepsi:
             cursor.execute(
                 "SELECT id, ad, urun_cinsi, urun_kategorisi, islem_birimi, "
-                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer') FROM urunler ORDER BY sira ASC, id ASC"
+                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer'), COALESCE(mobil_aktif, TRUE) FROM urunler ORDER BY sira ASC, id ASC"
             )
         else:
             cursor.execute(
                 "SELECT id, ad, urun_cinsi, urun_kategorisi, islem_birimi, "
-                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer') FROM urunler "
+                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer'), COALESCE(mobil_aktif, TRUE) FROM urunler "
                 "WHERE aktif = TRUE ORDER BY sira ASC, id ASC"
             )
         rows = cursor.fetchall()
@@ -753,7 +893,7 @@ def urunleri_getir(hepsi: bool = False):
                 "urun_kategorisi": r[3], "islem_birimi": r[4],
                 "milyem": float(r[5]), "has_karsiligi": float(r[6]),
                 "renk": r[7], "sira": r[8], "aktif": r[9],
-                "urun_grubu": r[10]
+                "urun_grubu": r[10], "mobil_aktif": bool(r[11])
             }
             for r in rows
         ]
@@ -772,15 +912,15 @@ async def urun_ekle(payload: UrunPayload):
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO urunler
-               (ad, urun_cinsi, urun_kategorisi, islem_birimi, milyem, has_karsiligi, renk, sira, aktif, urun_grubu)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               (ad, urun_cinsi, urun_kategorisi, islem_birimi, milyem, has_karsiligi, renk, sira, aktif, urun_grubu, mobil_aktif)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
                 payload.ad.strip(), payload.urun_cinsi.strip().upper(),
                 payload.urun_kategorisi.strip().upper(), payload.islem_birimi.strip().upper(),
                 payload.milyem, payload.has_karsiligi,
                 payload.renk, payload.sira, payload.aktif,
-                (payload.urun_grubu or "Diğer").strip()
+                (payload.urun_grubu or "Diğer").strip(), payload.mobil_aktif
             )
         )
         new_id = cursor.fetchone()[0]
@@ -811,7 +951,7 @@ async def urun_guncelle(urun_id: int, payload: UrunGuncellePayload):
             "islem_birimi": payload.islem_birimi, "milyem": payload.milyem,
             "has_karsiligi": payload.has_karsiligi, "renk": payload.renk,
             "sira": payload.sira, "aktif": payload.aktif,
-            "urun_grubu": payload.urun_grubu
+            "urun_grubu": payload.urun_grubu, "mobil_aktif": payload.mobil_aktif
         }
         for alan, deger in alan_map.items():
             if deger is not None:
@@ -871,6 +1011,38 @@ async def urun_sil(urun_id: int):
 # ─────────────────────────────────────────────
 # KATEGORİ YÖNETİMİ ENDPOINT'LERİ
 # ─────────────────────────────────────────────
+class KategoriSiralaPayload(BaseModel):
+    sirali_id_listesi: list[int]
+
+def _normalize_kategori_sirasi(cursor):
+    """Kategorilerin sıra numaralarını 1'den başlayarak ardışık ve benzersiz şekilde günceller."""
+    cursor.execute("SELECT id FROM kategoriler ORDER BY sira ASC, id ASC")
+    rows = cursor.fetchall()
+    for index, r in enumerate(rows):
+        cursor.execute("UPDATE kategoriler SET sira = %s WHERE id = %s", (index + 1, r[0]))
+
+@app.post("/kategoriler/sirala")
+async def kategorileri_sirala(payload: KategoriSiralaPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        # Listeyi sırayla güncelle
+        for index, kat_id in enumerate(payload.sirali_id_listesi):
+            cursor.execute(
+                "UPDATE kategoriler SET sira = %s WHERE id = %s",
+                (index + 1, kat_id)
+            )
+        conn.commit()
+        cursor.close()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_KATEGORILER"}))
+        return {"mesaj": "Kategoriler başarıyla sıralandı."}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Sıralama güncellenemedi: {e}")
+    finally:
+        if conn: conn.close()
+
 @app.get("/kategoriler")
 def kategorileri_getir(hepsi: bool = False):
     """Tüm kategorileri döner. hepsi=True ise pasif kategorileri de dahil eder."""
@@ -900,11 +1072,17 @@ async def kategori_ekle(payload: KategoriPayload):
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
+        # Sıra belirtilmediyse otomatik olarak sıranın sonuna ekle
+        cursor.execute("SELECT COALESCE(MAX(sira), 0) FROM kategoriler")
+        max_sira = cursor.fetchone()[0]
+        sira_val = payload.sira if payload.sira > 0 else (max_sira + 1)
+
         cursor.execute(
             "INSERT INTO kategoriler (ad, etiket, renk, sira, aktif) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (payload.ad.strip().upper(), payload.etiket.strip(), payload.renk.strip(), payload.sira, payload.aktif)
+            (payload.ad.strip().upper(), payload.etiket.strip(), payload.renk.strip(), sira_val, payload.aktif)
         )
         new_id = cursor.fetchone()[0]
+        _normalize_kategori_sirasi(cursor)
         conn.commit()
         await manager.broadcast_text(json.dumps({"type": "REFRESH_KATEGORILER"}))
         return {"id": new_id, "mesaj": "Kategori başarıyla eklendi."}
@@ -950,6 +1128,7 @@ async def kategori_guncelle(kategori_id: int, payload: KategoriGuncellePayload):
         )
         if cursor.fetchone() is None:
             raise HTTPException(status_code=404, detail="Kategori bulunamadı.")
+        _normalize_kategori_sirasi(cursor)
         conn.commit()
         await manager.broadcast_text(json.dumps({"type": "REFRESH_KATEGORILER"}))
         return {"mesaj": "Kategori güncellendi."}
@@ -990,6 +1169,7 @@ async def kategori_sil(kategori_id: int):
                 detail=f"Bu kategoride {urun_sayisi} ürün var. Önce ürünleri başka kategoriye taşıyın veya silin."
             )
         cursor.execute("DELETE FROM kategoriler WHERE id = %s", (kategori_id,))
+        _normalize_kategori_sirasi(cursor)
         conn.commit()
         await manager.broadcast_text(json.dumps({"type": "REFRESH_KATEGORILER"}))
         return {"mesaj": "Kategori silindi."}
@@ -1048,6 +1228,10 @@ async def manuel_islem_ekle(payload: IslemPayload):
 
         # 2. Kategoriye Göre Has Hesaplama — override varsa kullan, yoksa MILYEM_MAP
         if urun_kategorisi == "PIRLANTA":
+            milyem = 0.0
+            hesaplanan_has = 0.0
+
+        elif urun_kategorisi in ("DÖVİZ", "DOVIZ"):
             milyem = 0.0
             hesaplanan_has = 0.0
 
@@ -1374,6 +1558,9 @@ async def islem_duzenle(islem_id: int, payload: IslemPayload):
         # Manuel endpoint ile aynı has hesaplama mantığı
         if urun_kategorisi == "PIRLANTA":
             hesaplanan_has = 0.0
+        elif urun_kategorisi in ("DÖVİZ", "DOVIZ"):
+            milyem = 0.0
+            hesaplanan_has = 0.0
         elif urun_kategorisi == "SARRAFIYE":
             has_karsiligi = SARRAFIYE_CINSI_MAP.get(urun_cinsi)
             if has_karsiligi is None:
@@ -1398,11 +1585,13 @@ async def islem_duzenle(islem_id: int, payload: IslemPayload):
             """
             UPDATE islemler
             SET islem_tipi=%s, urun_kategorisi=%s, urun_cinsi=%s, brut_miktar=%s,
-                milyem=%s, birim_fiyat=%s, net_has_miktar=%s, odeme_tipi=%s, adet=%s
+                milyem=%s, birim_fiyat=%s, net_has_miktar=%s, odeme_tipi=%s, adet=%s,
+                doviz_tutar=%s, doviz_kuru=%s
             WHERE id=%s
             """,
             (islem_tipi, urun_kategorisi, urun_cinsi, brut,
-             milyem, payload.birim_fiyat, hesaplanan_has, odeme_tipi, adet, islem_id)
+             milyem, payload.birim_fiyat, hesaplanan_has, odeme_tipi, adet,
+             payload.doviz_tutar, payload.doviz_kuru, islem_id)
         )
         conn.commit()
         cursor.close()
@@ -1416,6 +1605,8 @@ async def islem_duzenle(islem_id: int, payload: IslemPayload):
             "ayar":       urun_cinsi,
             "has":        hesaplanan_has,
             "odeme_tipi": odeme_tipi,
+            "doviz_tutar": payload.doviz_tutar,
+            "doviz_kuru":  payload.doviz_kuru,
             "eski_tip":   old_tip,
             "eski_has":   float(old_has),
         }, ensure_ascii=False)
@@ -1456,14 +1647,14 @@ def personel_istatistikleri(
             SELECT p.id, p.ad_soyad, p.tetikleme_kelimesi, p.rol,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' THEN i.net_has_miktar ELSE 0 END),0) AS toplam_alis_has,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' THEN i.net_has_miktar ELSE 0 END),0) AS toplam_satis_has,
-                   COALESCE(SUM(COALESCE(i.brut_miktar,0)*COALESCE(i.birim_fiyat,0)),0) AS toplam_tl_hacim,
+                   COALESCE(SUM(COALESCE(i.birim_fiyat,0)),0) AS toplam_tl_hacim,
                    COUNT(i.id) AS islem_sayisi,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' AND i.urun_kategorisi='ALTIN' THEN i.brut_miktar ELSE 0 END),0) AS toplam_alis_altin_gr,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' AND i.urun_kategorisi='ALTIN' THEN i.brut_miktar ELSE 0 END),0) AS toplam_satis_altin_gr,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' AND i.urun_kategorisi='SARRAFIYE' THEN i.brut_miktar ELSE 0 END),0) AS toplam_alis_sarrafiye_adet,
                    COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' AND i.urun_kategorisi='SARRAFIYE' THEN i.brut_miktar ELSE 0 END),0) AS toplam_satis_sarrafiye_adet,
-                   COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' THEN COALESCE(i.brut_miktar,0)*COALESCE(i.birim_fiyat,0) ELSE 0 END),0) AS toplam_alis_tl,
-                   COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' THEN COALESCE(i.brut_miktar,0)*COALESCE(i.birim_fiyat,0) ELSE 0 END),0) AS toplam_satis_tl
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='ALIS' THEN COALESCE(i.birim_fiyat,0) ELSE 0 END),0) AS toplam_alis_tl,
+                   COALESCE(SUM(CASE WHEN i.islem_tipi='SATIS' THEN COALESCE(i.birim_fiyat,0) ELSE 0 END),0) AS toplam_satis_tl
             FROM personeller p
             LEFT JOIN islemler i ON i.personel_id = p.id {date_filter}
             GROUP BY p.id, p.ad_soyad, p.tetikleme_kelimesi, p.rol

@@ -11,6 +11,8 @@ const AYAR_LABEL = {
   'TAM_ALTIN':    'Tam',
   'ATA_ALTIN':    'Ata',
   'PIRLANTA':     'Pırlanta',
+  'USD':          'Amerikan Doları (USD)',
+  'EUR':          'Euro (EUR)',
 };
 
 const AYAR_COLOR = {
@@ -23,6 +25,8 @@ const AYAR_COLOR = {
   'TAM_ALTIN':    'text-yellow-800 bg-yellow-100',
   'ATA_ALTIN':    'text-yellow-900 bg-yellow-100',
   'PIRLANTA':     'text-pink-700 bg-pink-100',
+  'USD':          'text-emerald-700 bg-emerald-100',
+  'EUR':          'text-purple-700 bg-purple-100',
 };
 
 // onEdit prop'unu ekledik
@@ -36,7 +40,9 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
     urun_cinsi: '22_AYAR',
     odeme_tipi: 'NAKIT',
     miktar: '',
-    birim_fiyat: ''
+    birim_fiyat: '',
+    doviz_tutar: 0,
+    doviz_kuru: 1
   });
 
   // Düzenle modalı açıldığında mevcut verileri forma doldur
@@ -47,7 +53,9 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
         urun_cinsi: editModal.islem.ayar || '22_AYAR',
         odeme_tipi: editModal.islem.odeme_tipi || 'NAKIT',
         miktar: editModal.islem.miktar || '',
-        birim_fiyat: editModal.islem.birim_fiyat || 0
+        birim_fiyat: editModal.islem.birim_fiyat || 0,
+        doviz_tutar: editModal.islem.doviz_tutar || 0,
+        doviz_kuru: editModal.islem.doviz_kuru || 1
       });
     }
   }, [editModal.islem]);
@@ -70,6 +78,9 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
       if (cinsi === 'PIRLANTA') {
         islemBirimi = 'ADET';
         urunKategorisi = 'PIRLANTA';
+      } else if (cinsi === 'USD' || cinsi === 'EUR') {
+        islemBirimi = 'ADET';
+        urunKategorisi = 'DÖVİZ';
       } else if (cinsi.includes('_ALTIN')) {
         islemBirimi = 'ADET';
         urunKategorisi = 'SARRAFIYE';
@@ -83,7 +94,9 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
         odeme_tipi: formData.odeme_tipi,
         brut_miktar: parseFloat(formData.miktar),
         adet: islemBirimi === 'ADET' ? parseInt(formData.miktar, 10) : 1,
-        birim_fiyat: parseFloat(formData.birim_fiyat)
+        birim_fiyat: parseFloat(formData.birim_fiyat),
+        doviz_tutar: parseFloat(formData.doviz_tutar || 0),
+        doviz_kuru: parseFloat(formData.doviz_kuru || 1)
       });
     }
     setEditModal({ isOpen: false, islem: null });
@@ -170,6 +183,14 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                       {islem.odeme_tipi === 'KART' ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
                           💳 Kart
+                        </span>
+                      ) : islem.odeme_tipi === 'USD' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                          💵 USD ({islem.doviz_tutar ? `${Number(islem.doviz_tutar).toFixed(2)} $` : '$'})
+                        </span>
+                      ) : islem.odeme_tipi === 'EUR' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+                          💵 EUR ({islem.doviz_tutar ? `${Number(islem.doviz_tutar).toFixed(2)} €` : '€'})
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-none text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
@@ -289,6 +310,8 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                   >
                     <option value="NAKIT">Nakit</option>
                     <option value="KART">Kart</option>
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
                   </select>
                 </div>
               </div>
@@ -337,6 +360,30 @@ export const IslemTable = ({ islemler, onUndo, onEdit }) => {
                   </div>
                 </div>
               </div>
+
+              {/* Döviz Bilgileri (Ödeme tipi döviz ise ya da ürün döviz ise) */}
+              {(formData.odeme_tipi === 'USD' || formData.odeme_tipi === 'EUR' || formData.urun_cinsi === 'USD' || formData.urun_cinsi === 'EUR') && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Döviz Tutarı</label>
+                    <input
+                      type="number" step="0.01" required
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500"
+                      value={formData.doviz_tutar}
+                      onChange={(e) => setFormData({...formData, doviz_tutar: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase">Döviz Kuru</label>
+                    <input
+                      type="number" step="0.0001" required
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500"
+                      value={formData.doviz_kuru}
+                      onChange={(e) => setFormData({...formData, doviz_kuru: e.target.value})}
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="pt-4 border-t border-slate-100 flex gap-3">
                 <button

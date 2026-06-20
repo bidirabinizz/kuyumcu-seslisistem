@@ -10,6 +10,7 @@ class Urun {
   final int sira;
   final bool aktif;
   final String urunGrubu;
+  final bool mobilAktif;
 
   Urun({
     required this.id,
@@ -23,6 +24,7 @@ class Urun {
     required this.sira,
     required this.aktif,
     required this.urunGrubu,
+    required this.mobilAktif,
   });
 
   factory Urun.fromJson(Map<String, dynamic> json) {
@@ -38,6 +40,7 @@ class Urun {
       sira:           json['sira'] as int,
       aktif:          json['aktif'] as bool,
       urunGrubu:      (json['urun_grubu'] as String?) ?? 'Diğer',
+      mobilAktif:     (json['mobil_aktif'] as bool?) ?? true,
     );
   }
 

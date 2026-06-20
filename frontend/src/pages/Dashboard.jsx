@@ -120,11 +120,10 @@ export const Dashboard = () => {
   const piyasaFiyat = Number(kurlar?.gram_altin_24k_try || 0);
   const piyasaPL = donemIslemleri.reduce((acc, i) => {
     const has   = Number(i.has || 0);
-    const brut  = Number(i.miktar || 0);
     const birim = Number(i.birim_fiyat || 0);
-    if (!has || !brut || !birim || !piyasaFiyat) return acc;
+    if (!has || !birim || !piyasaFiyat) return acc;
     const market  = has * piyasaFiyat;
-    const nominal = brut * birim;
+    const nominal = birim;
     return i.tip === 'ALIS' ? acc + (market - nominal) : acc + (nominal - market);
   }, 0);
 

@@ -181,27 +181,67 @@ export const useSocket = (url, dateFilter) => {
         has -= i.has;
       }
 
-      const tutarTl = (i.miktar || 0) * (i.birim_fiyat || 0);
+      const tutarTl = Number(i.birim_fiyat || 0);
       const dovizVal = Number(i.doviz_tutar || 0);
+      const isDoviz = i.kategori === 'DÖVİZ' || i.kategori === 'DOVIZ';
 
       // 2. Nakit TL, Kart, USD, EUR Kasaları
-      if (i.odeme_tipi === 'NAKIT') {
-        if (i.tip === 'SATIS') {
-          tl += tutarTl;
-        } else {
-          tl -= tutarTl;
+      if (isDoviz) {
+        const dovizMiktar = Number(i.miktar || 0);
+        // Hangi döviz cinsiyse onun kasasını güncelle
+        if (i.ayar === 'USD') {
+          if (i.tip === 'ALIS') {
+            usd += dovizMiktar; // Dolar aldık -> USD artar
+          } else {
+            usd -= dovizMiktar; // Dolar sattık -> USD azalır
+          }
+        } else if (i.ayar === 'EUR') {
+          if (i.tip === 'ALIS') {
+            eur += dovizMiktar; // Euro aldık -> EUR artar
+          } else {
+            eur -= dovizMiktar; // Euro sattık -> EUR azalır
+          }
         }
-      } else if (i.odeme_tipi === 'USD') {
-        if (i.tip === 'SATIS') {
-          usd += dovizVal;
-        } else {
-          usd -= dovizVal;
+        // Karşıt para kasasını (TL) güncelle
+        if (i.odeme_tipi === 'NAKIT') {
+          if (i.tip === 'ALIS') {
+            tl -= tutarTl; // Döviz aldık, karşılığında TL verdik -> TL azalır
+          } else {
+            tl += tutarTl; // Döviz sattık, karşılığında TL aldık -> TL artar
+          }
+        } else if (i.odeme_tipi === 'KART') {
+          if (i.tip === 'ALIS') {
+            tl -= tutarTl;
+          } else {
+            tl += tutarTl;
+          }
         }
-      } else if (i.odeme_tipi === 'EUR') {
-        if (i.tip === 'SATIS') {
-          eur += dovizVal;
-        } else {
-          eur -= dovizVal;
+      } else {
+        // Standart altın, sarrafiye, pırlanta vb. ürün işlemleri
+        if (i.odeme_tipi === 'NAKIT') {
+          if (i.tip === 'SATIS') {
+            tl += tutarTl;
+          } else {
+            tl -= tutarTl;
+          }
+        } else if (i.odeme_tipi === 'KART') {
+          if (i.tip === 'SATIS') {
+            tl += tutarTl;
+          } else {
+            tl -= tutarTl;
+          }
+        } else if (i.odeme_tipi === 'USD') {
+          if (i.tip === 'SATIS') {
+            usd += dovizVal;
+          } else {
+            usd -= dovizVal;
+          }
+        } else if (i.odeme_tipi === 'EUR') {
+          if (i.tip === 'SATIS') {
+            eur += dovizVal;
+          } else {
+            eur -= dovizVal;
+          }
         }
       }
     });

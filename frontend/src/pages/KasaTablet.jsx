@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { API_BASE } from '../apiConfig';
+import { API_BASE, WS_BASE } from '../apiConfig';
 import { NumPad } from '../components/NumPad';
 import { ChevronLeft, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 
@@ -22,16 +22,7 @@ const renk = (key, aktif) => {
 };
 
 // ─── Adım 1: Personel Seçimi ────────────────────────────────────────────────
-function PersonelSec({ onSec }) {
-  const [personeller, setPersoneller] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    axios.get(`${API_BASE}/personeller`)
-      .then(r => setPersoneller(r.data))
-      .finally(() => setLoading(false));
-  }, []);
-
+function PersonelSec({ onSec, personeller = [], loading = false }) {
   const initials = (ad) => ad.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 
   return (
@@ -77,27 +68,28 @@ function PersonelSec({ onSec }) {
 }
 
 // ─── Adım 2: İşlem Girişi ─────────────────────────────────────────────────────
-function IslemGir({ personel, onGeri, onDevam }) {
-  const [urunler, setUrunler]       = useState([]);
-  const [kategoriler, setKategoriler] = useState([]);
+function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], loading = false }) {
   const [secilenUrun, setSecilenUrun] = useState(null);
   const [islemTipi, setIslemTipi]   = useState('SATIS');
   const [odemeTipi, setOdemeTipi]   = useState('NAKIT');
   const [miktar, setMiktar]         = useState('');
   const [fiyat, setFiyat]           = useState('');
   const [aktifInput, setAktifInput] = useState('miktar'); // 'miktar' | 'fiyat'
-  const [loading, setLoading]       = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      axios.get(`${API_BASE}/urunler`),
-      axios.get(`${API_BASE}/kategoriler`),
-    ]).then(([urunRes, katRes]) => {
-      setUrunler(urunRes.data);
-      setKategoriler(katRes.data);
-      if (urunRes.data.length > 0) setSecilenUrun(urunRes.data[0]);
-    }).finally(() => setLoading(false));
-  }, []);
+    if (urunler.length > 0) {
+      if (!secilenUrun || !urunler.some(u => u.id === secilenUrun.id)) {
+        setSecilenUrun(urunler[0]);
+      } else {
+        const updated = urunler.find(u => u.id === secilenUrun.id);
+        if (updated) {
+          setSecilenUrun(updated);
+        }
+      }
+    } else {
+      setSecilenUrun(null);
+    }
+  }, [urunler]);
 
   const handleDevam = () => {
     if (!secilenUrun || !miktar || parseFloat(miktar) <= 0) return;
@@ -304,9 +296,9 @@ function IslemOnayla({ data, onGeri, onTamamlandi, kurlar }) {
 
   // Has hesaplama önizlemesi
   let hasGoster = null;
-  if (urun.urun_kategorisi === 'ALTIN' && urun.milyem > 0) {
+  if (urun.milyem > 0) {
     hasGoster = (miktar * urun.milyem).toFixed(4) + ' gr has';
-  } else if (urun.urun_kategorisi === 'SARRAFIYE' && urun.has_karsiligi > 0) {
+  } else if (urun.has_karsiligi > 0) {
     hasGoster = (miktar * urun.has_karsiligi).toFixed(4) + ' gr has';
   }
 
@@ -315,14 +307,23 @@ function IslemOnayla({ data, onGeri, onTamamlandi, kurlar }) {
   let computedDovizTutar = 0.0;
   let computedDovizKuru = 1.0;
 
-  if (odemeTipi === 'USD' && fiyat > 0) {
-    computedDovizKuru = kurlar?.usd_try || 1.0;
-    computedDovizTutar = fiyat / computedDovizKuru;
-    dovizGoster = computedDovizTutar.toFixed(2) + ' USD ($)';
-  } else if (odemeTipi === 'EUR' && fiyat > 0) {
-    computedDovizKuru = kurlar?.eur_try || 1.0;
-    computedDovizTutar = fiyat / computedDovizKuru;
-    dovizGoster = computedDovizTutar.toFixed(2) + ' EUR (€)';
+  const isDoviz = urun.urun_kategorisi === 'DÖVİZ' || urun.urun_kategorisi === 'DOVIZ';
+  let dovizBozmaDetay = null;
+  if (isDoviz && miktar > 0) {
+    const birimDovizKuru = (fiyat / miktar).toFixed(4);
+    dovizBozmaDetay = `${miktar} ${urun.urun_cinsi} ➔ ${fiyat.toLocaleString('tr-TR')} ₺ | 1 ${urun.urun_cinsi} = ${birimDovizKuru} ₺`;
+  }
+
+  if (!isDoviz) {
+    if (odemeTipi === 'USD' && fiyat > 0) {
+      computedDovizKuru = kurlar?.usd_try || 1.0;
+      computedDovizTutar = fiyat / computedDovizKuru;
+      dovizGoster = computedDovizTutar.toFixed(2) + ' USD ($)';
+    } else if (odemeTipi === 'EUR' && fiyat > 0) {
+      computedDovizKuru = kurlar?.eur_try || 1.0;
+      computedDovizTutar = fiyat / computedDovizKuru;
+      dovizGoster = computedDovizTutar.toFixed(2) + ' EUR (€)';
+    }
   }
 
   const handleKaydet = async () => {
@@ -342,8 +343,8 @@ function IslemOnayla({ data, onGeri, onTamamlandi, kurlar }) {
         milyem_override:          urun.milyem || null,
         has_karsiligi_override:   urun.has_karsiligi || null,
         urun_adi:                 urun.ad,
-        doviz_tutar:              Math.round(computedDovizTutar * 100) / 100,
-        doviz_kuru:               computedDovizKuru,
+        doviz_tutar:              isDoviz ? miktar : (Math.round(computedDovizTutar * 100) / 100),
+        doviz_kuru:               isDoviz ? (miktar > 0 ? (fiyat / miktar) : 1.0) : computedDovizKuru,
       };
       await axios.post(`${API_BASE}/islemler`, payload);
       setBasarili(true);
@@ -426,25 +427,37 @@ function IslemOnayla({ data, onGeri, onTamamlandi, kurlar }) {
             </div>
           </div>
 
-          {/* Fiyat */}
-          {fiyat > 0 && (
-            <div className="px-4 py-3 rounded-2xl bg-amber-400/10 border border-amber-400/30">
-              <p className="text-[10px] font-bold text-amber-400/70 uppercase tracking-wide mb-1">Toplam Fiyat</p>
-              <p className="font-black text-2xl text-amber-300">
-                {fiyat.toLocaleString('tr-TR')} ₺
+          {/* Döviz Bozma / Değişim Detayı veya Standart Fiyat */}
+          {isDoviz && dovizBozmaDetay ? (
+            <div className="px-4 py-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30">
+              <p className="text-[10px] font-bold text-emerald-400/70 uppercase tracking-wide mb-1">Döviz İşlem Detayı</p>
+              <p className="font-black text-lg text-emerald-300">
+                {dovizBozmaDetay}
               </p>
             </div>
-          )}
+          ) : (
+            <>
+              {/* Fiyat */}
+              {fiyat > 0 && (
+                <div className="px-4 py-3 rounded-2xl bg-amber-400/10 border border-amber-400/30">
+                  <p className="text-[10px] font-bold text-amber-400/70 uppercase tracking-wide mb-1">Toplam Fiyat</p>
+                  <p className="font-black text-2xl text-amber-300">
+                    {fiyat.toLocaleString('tr-TR')} ₺
+                  </p>
+                </div>
+              )}
 
-          {/* Döviz Tutarı */}
-          {dovizGoster && (
-            <div className="px-4 py-3 rounded-2xl bg-amber-500/10 border border-amber-500/30">
-              <p className="text-[10px] font-bold text-amber-400/70 uppercase tracking-wide mb-1">Ödenecek Döviz Tutarı</p>
-              <p className="font-black text-2xl text-amber-300">
-                {dovizGoster}
-              </p>
-              <p className="text-[10px] text-gray-500 mt-1 font-mono">Sistem Kuru: {computedDovizKuru} TL</p>
-            </div>
+              {/* Döviz Tutarı */}
+              {dovizGoster && (
+                <div className="px-4 py-3 rounded-2xl bg-amber-500/10 border border-amber-500/30">
+                  <p className="text-[10px] font-bold text-amber-400/70 uppercase tracking-wide mb-1">Ödenecek Döviz Tutarı</p>
+                  <p className="font-black text-2xl text-amber-300">
+                    {dovizGoster}
+                  </p>
+                  <p className="text-[10px] text-gray-500 mt-1 font-mono">Sistem Kuru: {computedDovizKuru} TL</p>
+                </div>
+              )}
+            </>
           )}
 
           {/* Has karşılığı */}
@@ -486,16 +499,120 @@ function IslemOnayla({ data, onGeri, onTamamlandi, kurlar }) {
 
 // ─── ANA BİLEŞEN ─────────────────────────────────────────────────────────────
 export default function KasaTablet() {
-  const [adim, setAdim]           = useState(1);  // 1 | 2 | 3
-  const [personel, setPersonel]   = useState(null);
-  const [islemData, setIslemData] = useState(null);
-  const [kurlar, setKurlar]       = useState(null);
+  const [adim, setAdim]               = useState(1);  // 1 | 2 | 3
+  const [personel, setPersonel]       = useState(null);
+  const [islemData, setIslemData]     = useState(null);
+  const [kurlar, setKurlar]           = useState(null);
+  const [urunler, setUrunler]         = useState([]);
+  const [kategoriler, setKategoriler] = useState([]);
+  const [personeller, setPersoneller] = useState([]);
+  const [loading, setLoading]         = useState(true);
 
+  const yukleUrunlerVeKategoriler = useCallback(async () => {
+    try {
+      const [urunRes, katRes] = await Promise.all([
+        axios.get(`${API_BASE}/urunler`),
+        axios.get(`${API_BASE}/kategoriler`),
+      ]);
+      const mobilUrunler = urunRes.data.filter(u => u.mobil_aktif !== false);
+      setUrunler(mobilUrunler);
+      setKategoriler(katRes.data);
+    } catch (err) {
+      console.error('KasaTablet ürünler/kategoriler yüklenemedi:', err);
+    }
+  }, []);
+
+  const yuklePersoneller = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/personeller`);
+      setPersoneller(res.data);
+    } catch (err) {
+      console.error('KasaTablet personeller yüklenemedi:', err);
+    }
+  }, []);
+
+  const yukleKurlar = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/piyasa/kurlar`);
+      setKurlar(res.data);
+    } catch (err) {
+      console.error('KasaTablet kurlar alınamadı:', err);
+    }
+  }, []);
+
+  // İlk yükleme
   useEffect(() => {
-    axios.get(`${API_BASE}/piyasa/kurlar`)
-      .then(res => setKurlar(res.data))
-      .catch(err => console.error('KasaTablet kurlar alınamadı:', err));
-  }, [adim]); // Adım her değiştiğinde kurları tekrar tazeleyelim
+    setLoading(true);
+    Promise.all([
+      yukleUrunlerVeKategoriler(),
+      yuklePersoneller(),
+      yukleKurlar(),
+    ]).finally(() => setLoading(false));
+  }, [yukleUrunlerVeKategoriler, yuklePersoneller, yukleKurlar]);
+
+  // WebSocket ile canlı güncelleme dinleyicisi
+  useEffect(() => {
+    let ws = null;
+    let timeoutId = null;
+
+    function connect() {
+      console.log('[WS] KasaTablet bağlantısı başlatılıyor...', WS_BASE);
+      ws = new WebSocket(WS_BASE);
+
+      ws.onopen = () => {
+        console.log('✅ KasaTablet WebSocket Bağlantısı Başarılı');
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('[WS] KasaTablet mesaj alındı:', data);
+          if (data.type === 'REFRESH_URUNLER') {
+            yukleUrunlerVeKategoriler();
+          } else if (data.type === 'REFRESH_KATEGORILER') {
+            yukleUrunlerVeKategoriler();
+          } else if (data.type === 'REFRESH_PERSONELLER') {
+            yuklePersoneller();
+          } else if (data.type === 'REFRESH_KURLAR') {
+            yukleKurlar();
+          }
+        } catch (err) {
+          console.error('[WS] Hata:', err);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('❌ KasaTablet WebSocket Bağlantısı Kapandı, tekrar bağlanılıyor...');
+        timeoutId = setTimeout(() => {
+          connect();
+        }, 3000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('[WS] Hata:', err);
+        ws.close();
+      };
+    }
+
+    connect();
+
+    return () => {
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [yukleUrunlerVeKategoriler, yuklePersoneller, yukleKurlar]);
+
+  // Adım her değiştiğinde kurları da tazeleyelim
+  useEffect(() => {
+    yukleKurlar();
+  }, [adim, yukleKurlar]);
 
   const handlePersonelSec = (p) => { setPersonel(p); setAdim(2); };
   const handleGeriPersonel = () => { setPersonel(null); setAdim(1); };
@@ -518,9 +635,16 @@ export default function KasaTablet() {
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {adim === 1 && <PersonelSec onSec={handlePersonelSec} />}
+        {adim === 1 && <PersonelSec onSec={handlePersonelSec} personeller={personeller} loading={loading} />}
         {adim === 2 && personel && (
-          <IslemGir personel={personel} onGeri={handleGeriPersonel} onDevam={handleDevam} />
+          <IslemGir
+            personel={personel}
+            onGeri={handleGeriPersonel}
+            onDevam={handleDevam}
+            urunler={urunler}
+            kategoriler={kategoriler}
+            loading={loading}
+          />
         )}
         {adim === 3 && islemData && (
           <IslemOnayla data={islemData} onGeri={handleGeriIslem} onTamamlandi={handleTamamlandi} kurlar={kurlar} />

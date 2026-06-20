@@ -58,6 +58,25 @@ class _KasaScreenState extends State<KasaScreen> {
   bool _urunYukleniyor      = true;
   bool _kategoriYukleniyor  = true;
 
+  // Cached grouped products and ordered categories
+  Map<String, Map<String, List<Urun>>> _groupedUrunler = {};
+  List<_KatDisplayInfo> _orderedKats = [];
+
+  void _updateGroupedUrunler() {
+    final Map<String, Map<String, List<Urun>>> g = {};
+    for (final u in _urunler) {
+      g.putIfAbsent(u.urunKategorisi, () => {});
+      g[u.urunKategorisi]!.putIfAbsent(u.urunGrubu, () => []).add(u);
+    }
+    _groupedUrunler = g;
+
+    final dbKatCodes = _kategoriler.where((k) => k.aktif).map((k) => k.ad.toUpperCase()).toSet();
+    _orderedKats = [
+      ..._kategoriler.where((k) => k.aktif).map((k) => _KatDisplayInfo(ad: k.ad.toUpperCase(), etiket: k.etiket)),
+      ...g.keys.where((k) => !dbKatCodes.contains(k.toUpperCase())).map((k) => _KatDisplayInfo(ad: k, etiket: '📁 $k')),
+    ];
+  }
+
   // WebSocket ve Zamanlayıcı
   WebSocketChannel? _wsChannel;
   Timer? _reconnectTimer;
@@ -179,10 +198,12 @@ class _KasaScreenState extends State<KasaScreen> {
       if (res.statusCode == 200) {
         final liste = (json.decode(res.body) as List)
             .map((e) => Urun.fromJson(e))
+            .where((u) => u.mobilAktif)
             .toList();
         if (mounted) {
           setState(() {
             _urunler = liste;
+            _updateGroupedUrunler();
             if (liste.isNotEmpty && _secilenUrun == null) {
               _secilenUrun = liste.first;
             }
@@ -208,6 +229,7 @@ class _KasaScreenState extends State<KasaScreen> {
         if (mounted) {
           setState(() {
             _kategoriler = liste;
+            _updateGroupedUrunler();
           });
         }
       }
@@ -287,8 +309,8 @@ class _KasaScreenState extends State<KasaScreen> {
                     2 => _IslemGir(
                         key: const ValueKey(2),
                         personel: _secilenPersonel!,
-                        urunler: _urunler,
-                        kategoriler: _kategoriler,
+                        groupedUrunler: _groupedUrunler,
+                        orderedKats: _orderedKats,
                         urunYukleniyor: _urunYukleniyor,
                         kategoriYukleniyor: _kategoriYukleniyor,
                         secilenUrun: _secilenUrun,
@@ -430,83 +452,145 @@ class _PersonelSec extends StatelessWidget {
                         style: TextStyle(color: Color(0xFF6B7280), fontSize: 15),
                       ),
                     )
-                  : GridView.builder(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                        childAspectRatio: 1.1,
-                      ),
-                      itemCount: personeller.length,
-                      itemBuilder: (_, i) {
-                        final p = personeller[i];
-                        return Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () => onSec(p),
-                            borderRadius: BorderRadius.circular(0),
-                            child: Ink(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                border: Border.all(color: const Color(0xFFE5E5E5), width: 1.5),
-                                borderRadius: BorderRadius.circular(0),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.03),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 2),
-                                  )
-                                ],
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Container(
-                                    width: 60,
-                                    height: 60,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFFCFBFA),
-                                      border: Border.all(color: const Color(0xFFD4AF37), width: 1.5),
-                                      borderRadius: BorderRadius.circular(0),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        initials(p.adSoyad),
-                                        style: const TextStyle(
-                                          color: Color(0xFF1A1A1A),
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.w900,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    p.adSoyad,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: Color(0xFF1A1A1A),
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  if (p.rol.isNotEmpty) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      p.rol,
-                                      style: const TextStyle(
-                                        color: Color(0xFF6B7280),
-                                        fontSize: 11,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
+                  : Builder(
+                      builder: (context) {
+                        final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+                        return GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                            childAspectRatio: isLandscape ? 3.0 : 1.1,
                           ),
+                          itemCount: personeller.length,
+                          itemBuilder: (_, i) {
+                            final p = personeller[i];
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => onSec(p),
+                                borderRadius: BorderRadius.circular(0),
+                                child: Ink(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    border: Border.all(color: const Color(0xFFE5E5E5), width: 1.5),
+                                    borderRadius: BorderRadius.circular(0),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.03),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 2),
+                                      )
+                                    ],
+                                  ),
+                                  child: isLandscape
+                                      ? Row(
+                                          children: [
+                                            const SizedBox(width: 24),
+                                            Container(
+                                              width: 48,
+                                              height: 48,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFFFCFBFA),
+                                                border: Border.all(color: const Color(0xFFD4AF37), width: 1.5),
+                                                borderRadius: BorderRadius.circular(0),
+                                              ),
+                                              child: Center(
+                                                child: Text(
+                                                  initials(p.adSoyad),
+                                                  style: const TextStyle(
+                                                    color: Color(0xFF1A1A1A),
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w900,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 16),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  Text(
+                                                    p.adSoyad,
+                                                    style: const TextStyle(
+                                                      color: Color(0xFF1A1A1A),
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.w700,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                  if (p.rol.isNotEmpty) ...[
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      p.rol,
+                                                      style: const TextStyle(
+                                                        color: Color(0xFF6B7280),
+                                                        fontSize: 11,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                          ],
+                                        )
+                                      : Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Container(
+                                              width: 60,
+                                              height: 60,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFFFCFBFA),
+                                                border: Border.all(color: const Color(0xFFD4AF37), width: 1.5),
+                                                borderRadius: BorderRadius.circular(0),
+                                              ),
+                                              child: Center(
+                                                child: Text(
+                                                  initials(p.adSoyad),
+                                                  style: const TextStyle(
+                                                    color: Color(0xFF1A1A1A),
+                                                    fontSize: 20,
+                                                    fontWeight: FontWeight.w900,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            Text(
+                                              p.adSoyad,
+                                              textAlign: TextAlign.center,
+                                              style: const TextStyle(
+                                                color: Color(0xFF1A1A1A),
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            if (p.rol.isNotEmpty) ...[
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                p.rol,
+                                                style: const TextStyle(
+                                                  color: Color(0xFF6B7280),
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                ),
+                              ),
+                            );
+                          },
                         );
-                      },
+                      }
                     ),
         ),
       ],
@@ -517,8 +601,8 @@ class _PersonelSec extends StatelessWidget {
 // ─── ADIM 2: İşlem Girişi ─────────────────────────────────────────────────────
 class _IslemGir extends StatelessWidget {
   final Personel personel;
-  final List<Urun> urunler;
-  final List<Kategori> kategoriler;
+  final Map<String, Map<String, List<Urun>>> groupedUrunler;
+  final List<_KatDisplayInfo> orderedKats;
   final bool urunYukleniyor;
   final bool kategoriYukleniyor;
   final Urun? secilenUrun;
@@ -540,8 +624,8 @@ class _IslemGir extends StatelessWidget {
   const _IslemGir({
     super.key,
     required this.personel,
-    required this.urunler,
-    required this.kategoriler,
+    required this.groupedUrunler,
+    required this.orderedKats,
     required this.urunYukleniyor,
     required this.kategoriYukleniyor,
     required this.secilenUrun,
@@ -563,23 +647,9 @@ class _IslemGir extends StatelessWidget {
 
   bool get _devamAktif => miktar.isNotEmpty && (double.tryParse(miktar) ?? 0) > 0 && secilenUrun != null;
 
-  Map<String, Map<String, List<Urun>>> _grupla() {
-    final Map<String, Map<String, List<Urun>>> g = {};
-    for (final u in urunler) {
-      g.putIfAbsent(u.urunKategorisi, () => {});
-      g[u.urunKategorisi]!.putIfAbsent(u.urunGrubu, () => []).add(u);
-    }
-    return g;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final gruplar = _grupla();
-    final dbKatCodes = kategoriler.where((k) => k.aktif).map((k) => k.ad.toUpperCase()).toSet();
-    final orderedKats = [
-      ...kategoriler.where((k) => k.aktif).map((k) => _KatDisplayInfo(ad: k.ad.toUpperCase(), etiket: k.etiket)),
-      ...gruplar.keys.where((k) => !dbKatCodes.contains(k.toUpperCase())).map((k) => _KatDisplayInfo(ad: k, etiket: '📁 $k')),
-    ];
+    final gruplar = groupedUrunler;
 
     return Column(
       children: [
@@ -685,7 +755,7 @@ class _IslemGir extends StatelessWidget {
                                             grup.toUpperCase(),
                                             style: const TextStyle(
                                               color: Color(0xFF6B7280),
-                                              fontSize: 9,
+                                              fontSize: 12,
                                               fontWeight: FontWeight.w700,
                                             ),
                                           ),
@@ -885,14 +955,21 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
     setState(() { _yukleniyor = true; _hata = null; });
     try {
       final u = widget.urun;
+      final isDoviz = u.urunKategorisi == 'DÖVİZ' || u.urunKategorisi == 'DOVIZ';
       double dovizTutar = 0.0;
       double dovizKuru = 1.0;
-      if (widget.odemeTipi == 'USD' && widget.fiyat > 0) {
-        dovizKuru = (widget.kurlar?['usd_try'] as num?)?.toDouble() ?? 1.0;
-        dovizTutar = widget.fiyat / dovizKuru;
-      } else if (widget.odemeTipi == 'EUR' && widget.fiyat > 0) {
-        dovizKuru = (widget.kurlar?['eur_try'] as num?)?.toDouble() ?? 1.0;
-        dovizTutar = widget.fiyat / dovizKuru;
+
+      if (isDoviz) {
+        dovizTutar = widget.miktar;
+        dovizKuru = widget.miktar > 0 ? (widget.fiyat / widget.miktar) : 1.0;
+      } else {
+        if (widget.odemeTipi == 'USD' && widget.fiyat > 0) {
+          dovizKuru = (widget.kurlar?['usd_try'] as num?)?.toDouble() ?? 1.0;
+          dovizTutar = widget.fiyat / dovizKuru;
+        } else if (widget.odemeTipi == 'EUR' && widget.fiyat > 0) {
+          dovizKuru = (widget.kurlar?['eur_try'] as num?)?.toDouble() ?? 1.0;
+          dovizTutar = widget.fiyat / dovizKuru;
+        }
       }
 
       final payload = {
@@ -942,6 +1019,8 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
 
   @override
   Widget build(BuildContext context) {
+    final u = widget.urun;
+    final isDoviz = u.urunKategorisi == 'DÖVİZ' || u.urunKategorisi == 'DOVIZ';
     if (_basarili) {
       return Center(
         child: Column(
@@ -977,6 +1056,8 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
       );
     }
 
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -1009,49 +1090,50 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
                     BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4)),
                   ],
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Personel
-                    Row(
-                      children: [
-                        Container(
-                          width: 40, height: 40,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFCFBFA),
-                            border: Border.all(color: const Color(0xFFD4AF37), width: 1.5),
-                            borderRadius: BorderRadius.circular(0),
-                          ),
-                          child: Center(
-                            child: Text(
-                              widget.initials(widget.personel.adSoyad),
-                              style: const TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w900),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Personel
+                      Row(
+                        children: [
+                          Container(
+                            width: 40, height: 40,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFCFBFA),
+                              border: Border.all(color: const Color(0xFFD4AF37), width: 1.5),
+                              borderRadius: BorderRadius.circular(0),
+                            ),
+                            child: Center(
+                              child: Text(
+                                widget.initials(widget.personel.adSoyad),
+                                style: const TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w900),
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(widget.personel.adSoyad, style: const TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w700, fontSize: 15)),
-                            if (widget.personel.rol.isNotEmpty)
-                              Text(widget.personel.rol, style: const TextStyle(color: Color(0xFF6B7280), fontSize: 11)),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    const Divider(color: Color(0xFFE5E5E5)),
-                    const SizedBox(height: 16),
-                    // Detaylar
-                    GridView.count(
-                      shrinkWrap: true,
-                      crossAxisCount: 2,
-                      childAspectRatio: 2.2,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
-                      physics: const NeverScrollableScrollPhysics(),
-                      children: [
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(widget.personel.adSoyad, style: const TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w700, fontSize: 15)),
+                              if (widget.personel.rol.isNotEmpty)
+                               Text(widget.personel.rol, style: const TextStyle(color: Color(0xFF6B7280), fontSize: 11)),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Divider(color: Color(0xFFE5E5E5)),
+                      const SizedBox(height: 16),
+                      // Detaylar
+                      GridView.count(
+                        shrinkWrap: true,
+                        crossAxisCount: isLandscape ? 4 : 2,
+                        childAspectRatio: 2.2,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        physics: const NeverScrollableScrollPhysics(),
+                        children: [
                         _OzetKart(
                           baslik: 'İşlem',
                           deger: widget.islemTipi == 'SATIS' ? '↓ SATIŞ' : '↑ ALIŞ',
@@ -1087,68 +1169,101 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
                         ),
                       ],
                     ),
-                    if (widget.fiyat > 0) ...[
+                    if (isDoviz && widget.miktar > 0) ...[
                       const SizedBox(height: 10),
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFD4AF37).withOpacity(0.1),
+                          color: Colors.green.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(0),
-                          border: Border.all(color: const Color(0xFFD4AF37).withOpacity(0.3)),
+                          border: Border.all(color: Colors.green.withOpacity(0.3)),
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('Toplam Fiyat', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 12, fontWeight: FontWeight.w600)),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('Döviz İşlem Detayı', style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.w600)),
+                                Text(
+                                  '${widget.fiyat.toStringAsFixed(0)} ₺',
+                                  style: const TextStyle(color: Colors.green, fontSize: 20, fontWeight: FontWeight.w900),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
                             Text(
-                              '${widget.fiyat.toStringAsFixed(0)} ₺',
-                              style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 20, fontWeight: FontWeight.w900),
+                              '${widget.miktar} ${widget.urun.urunCinsi} ➔ ${widget.fiyat.toStringAsFixed(0)} ₺ | 1 ${widget.urun.urunCinsi} = ${(widget.fiyat / widget.miktar).toStringAsFixed(4)} ₺',
+                              style: const TextStyle(color: Colors.green, fontSize: 11, fontWeight: FontWeight.w600),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                    if (widget.fiyat > 0 && (widget.odemeTipi == 'USD' || widget.odemeTipi == 'EUR')) ...[
-                      Builder(builder: (context) {
-                        final kur = widget.odemeTipi == 'USD' 
-                            ? (widget.kurlar?['usd_try'] as num?)?.toDouble() ?? 1.0 
-                            : (widget.kurlar?['eur_try'] as num?)?.toDouble() ?? 1.0;
-                        final tutar = widget.fiyat / kur;
-                        final sembol = widget.odemeTipi == 'USD' ? '\$' : '€';
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(0),
-                              border: Border.all(color: Colors.amber.withOpacity(0.3)),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text('Ödenecek Döviz ($sembol)', style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.w600)),
-                                    Text(
-                                      '${tutar.toStringAsFixed(2)} $sembol',
-                                      style: const TextStyle(color: Colors.amber, fontSize: 20, fontWeight: FontWeight.w900),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Sistem Kuru: $kur TL',
-                                  style: TextStyle(color: Colors.grey.shade400, fontSize: 10, fontFamily: 'monospace'),
-                                ),
-                              ],
-                            ),
+                    ] else ...[
+                      if (widget.fiyat > 0) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFD4AF37).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(0),
+                            border: Border.all(color: const Color(0xFFD4AF37).withOpacity(0.3)),
                           ),
-                        );
-                      }),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Toplam Fiyat', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 12, fontWeight: FontWeight.w600)),
+                              Text(
+                                '${widget.fiyat.toStringAsFixed(0)} ₺',
+                                style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 20, fontWeight: FontWeight.w900),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      if (widget.fiyat > 0 && (widget.odemeTipi == 'USD' || widget.odemeTipi == 'EUR')) ...[
+                        Builder(builder: (context) {
+                          final kur = widget.odemeTipi == 'USD' 
+                              ? (widget.kurlar?['usd_try'] as num?)?.toDouble() ?? 1.0 
+                              : (widget.kurlar?['eur_try'] as num?)?.toDouble() ?? 1.0;
+                          final tutar = widget.fiyat / kur;
+                          final sembol = widget.odemeTipi == 'USD' ? '\$' : '€';
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(0),
+                                border: Border.all(color: Colors.amber.withOpacity(0.3)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text('Ödenecek Döviz ($sembol)', style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.w600)),
+                                      Text(
+                                        '${tutar.toStringAsFixed(2)} $sembol',
+                                        style: const TextStyle(color: Colors.amber, fontSize: 20, fontWeight: FontWeight.w900),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Sistem Kuru: $kur TL',
+                                    style: TextStyle(color: Colors.grey.shade400, fontSize: 10, fontFamily: 'monospace'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
                     ],
                     if (_hasGoster != null) ...[
                       const SizedBox(height: 8),
@@ -1158,7 +1273,8 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
                         textAlign: TextAlign.center,
                       ),
                     ],
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

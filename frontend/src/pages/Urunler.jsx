@@ -3,7 +3,7 @@ import axios from 'axios';
 import { API_BASE } from '../apiConfig';
 import {
   Plus, Pencil, Trash2, ToggleLeft, ToggleRight,
-  ChevronUp, ChevronDown, Loader2, X, Save, Tag, Package,
+  ChevronUp, ChevronDown, Loader2, X, Save, Tag, Package, Tablet, GripVertical
 } from 'lucide-react';
 import { InfoTooltip } from '../components/InfoTooltip';
 
@@ -23,6 +23,7 @@ const BOSH_FORM = {
   ad: '', urun_cinsi: '', urun_kategorisi: '',
   islem_birimi: 'GRAM', milyem: '', has_karsiligi: '',
   renk: 'amber', sira: 0, aktif: true, urun_grubu: 'Diğer',
+  mobil_aktif: true,
 };
 
 const BOSH_KAT_FORM = { ad: '', etiket: '', renk: 'amber', sira: 0, aktif: true };
@@ -34,6 +35,7 @@ function UrunModal({ urun, kategoriler, onClose, onSave }) {
     milyem: urun.milyem ?? '',
     has_karsiligi: urun.has_karsiligi ?? '',
     urun_grubu: urun.urun_grubu ?? 'Diğer',
+    mobil_aktif: urun.mobil_aktif ?? true,
   } : {
     ...BOSH_FORM,
     urun_kategorisi: kategoriler[0]?.ad ?? '',
@@ -64,8 +66,8 @@ function UrunModal({ urun, kategoriler, onClose, onSave }) {
     try {
       const payload = {
         ...form,
-        milyem: parseFloat(form.milyem) || 0,
-        has_karsiligi: parseFloat(form.has_karsiligi) || 0,
+        milyem: form.islem_birimi === 'ADET' ? 0 : (parseFloat(form.milyem) || 0),
+        has_karsiligi: form.islem_birimi === 'GRAM' ? 0 : (parseFloat(form.has_karsiligi) || 0),
         sira: parseInt(form.sira) || 0,
       };
       if (urun) {
@@ -171,29 +173,35 @@ function UrunModal({ urun, kategoriler, onClose, onSave }) {
           {/* Hesaplama parametreleri */}
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">
+              <label className={`block text-sm font-medium mb-1 ${form.islem_birimi === 'ADET' ? 'text-gray-400' : 'text-gray-600'}`}>
                 Milyem <span className="text-xs text-gray-400">(0–1)</span>
                 <InfoTooltip text="Milyem değeri (Örn: 22 Ayar için 0.9160). Brüt miktar ile çarpılarak net has miktarını bulur." />
               </label>
               <input
                 type="number" step="0.0001" min="0" max="1"
-                value={form.milyem}
+                value={form.islem_birimi === 'ADET' ? '' : form.milyem}
                 onChange={e => set('milyem', e.target.value)}
-                placeholder="0.9160"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-amber-400 outline-none"
+                placeholder={form.islem_birimi === 'ADET' ? '—' : '0.9160'}
+                disabled={form.islem_birimi === 'ADET'}
+                className={`w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-amber-400 outline-none ${
+                  form.islem_birimi === 'ADET' ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''
+                }`}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">
+              <label className={`block text-sm font-medium mb-1 ${form.islem_birimi === 'GRAM' ? 'text-gray-400' : 'text-gray-600'}`}>
                 Has Karş. <span className="text-xs text-gray-400">(gr/adet)</span>
                 <InfoTooltip text="Adet bazlı sarrafiye ürünleri için tek bir adedin sahip olduğu sabit has altın gram karşılığı (Örn: Çeyrek için 1.6030)." />
               </label>
               <input
                 type="number" step="0.0001" min="0"
-                value={form.has_karsiligi}
+                value={form.islem_birimi === 'GRAM' ? '' : form.has_karsiligi}
                 onChange={e => set('has_karsiligi', e.target.value)}
-                placeholder="1.6030"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-amber-400 outline-none"
+                placeholder={form.islem_birimi === 'GRAM' ? '—' : '1.6030'}
+                disabled={form.islem_birimi === 'GRAM'}
+                className={`w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-amber-400 outline-none ${
+                  form.islem_birimi === 'GRAM' ? 'bg-gray-50 text-gray-400 cursor-not-allowed' : ''
+                }`}
               />
             </div>
             <div>
@@ -244,6 +252,30 @@ function UrunModal({ urun, kategoriler, onClose, onSave }) {
                 ))}
               </div>
             </div>
+          </div>
+
+          {/* Mobil Görünürlük */}
+          <div className="flex items-center gap-2 py-1 select-none">
+            <input
+              type="checkbox"
+              id="mobil_aktif"
+              checked={form.mobil_aktif}
+              onChange={e => set('mobil_aktif', e.target.checked)}
+              className="w-4 h-4 text-amber-500 border-gray-300 rounded focus:ring-amber-400 cursor-pointer"
+            />
+            <label htmlFor="mobil_aktif" className="text-xs font-semibold text-gray-600 cursor-pointer flex items-center gap-1">
+              Mobilde (Tablet/Ses) Göster
+              <InfoTooltip text="Bu ürünün kasa tablet ekranında ve mobil sesli sistemde menü butonu olarak listelenip listelenmeyeceğini kontrol eder.
+              
+              #### [MODIFY] [IslemTable.jsx](file:///c:/Users/bidir/Desktop/caparkuyumculuk/frontend/src/components/IslemTable.jsx)
+              - `AYAR_LABEL` ve `AYAR_COLOR` içerisine `USD` ve `EUR` anahtarları eklendi.
+              - Ödeme tipi rozetlerinde döviz miktarı ve kuru gösterilerek premium tasarım sunuldu.
+              - İşlem Düzenleme modalında döviz tutarı ve kurunu manuel güncelleme desteği sağlandı.
+
+              #### [MODIFY] [Urunler.jsx](file:///c:/Users/bidir/Desktop/caparkuyumculuk/frontend/src/pages/Urunler.jsx)
+              - Ürünler tablosuna **Tablet** adında yeni bir sütun eklenerek, ürünün mobil/tablet ekranda gösterilme durumu (`mobil_aktif`) için premium bir tablet cihazı simgesi yerleştirildi.
+              - Simgelerin üzerine tıklandığında ürünün tablette görünürlüğünü doğrudan değiştirebilen `handleToggleMobilAktif` fonksiyonu entegre edildi: Aktif ise yeşil, kapalı/pasif ise gri renkli tablet simgesi gösterilmektedir." />
+            </label>
           </div>
 
           {hata && (
@@ -406,12 +438,51 @@ function KategoriModal({ kategori, onClose, onSave }) {
 }
 
 // ─── KATEGORİLER PANELİ ───────────────────────────────────────────────────────
-function KategorilerPaneli() {
+function KategorilerPaneli({ onRefresh }) {
   const [kategoriler, setKategoriler] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [silOnay, setSilOnay] = useState(null);
   const [silHata, setSilHata] = useState('');
+  const [draggedIndex, setDraggedIndex] = useState(null);
+
+  const handleDragStart = (e, index) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', e.currentTarget);
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = async (e, index) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+
+    const sirali = [...kategoriler].sort((a, b) => a.sira - b.sira);
+    const draggedItem = sirali[draggedIndex];
+    sirali.splice(draggedIndex, 1);
+    sirali.splice(index, 0, draggedItem);
+
+    const siraliIdListesi = sirali.map(k => k.id);
+    const guncelKategoriler = sirali.map((k, idx) => ({ ...k, sira: idx + 1 }));
+    setKategoriler(guncelKategoriler);
+
+    try {
+      await axios.post(`${API_BASE}/kategoriler/sirala`, { sirali_id_listesi: siraliIdListesi });
+      yukle();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Kategoriler sıralanamadı:', err);
+      yukle();
+    }
+    setDraggedIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null);
+  };
 
   const yukle = useCallback(async () => {
     setLoading(true);
@@ -431,6 +502,7 @@ function KategorilerPaneli() {
       await axios.delete(`${API_BASE}/kategoriler/${id}`);
       setSilOnay(null);
       yukle();
+      if (onRefresh) onRefresh();
     } catch (err) {
       setSilHata(err.response?.data?.detail || 'Silinemedi.');
     }
@@ -463,9 +535,10 @@ function KategorilerPaneli() {
             <p className="text-sm mt-1">Sağ üstten yeni kategori ekleyin.</p>
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full text-sm select-none">
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
+                <th className="px-3 py-3 w-10"></th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Renk</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Etiket</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Kod</th>
@@ -475,16 +548,30 @@ function KategorilerPaneli() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {[...kategoriler].sort((a, b) => a.sira - b.sira).map(k => {
+              {[...kategoriler].sort((a, b) => a.sira - b.sira).map((k, idx) => {
                 const renkObj = RENK_MAP[k.renk] || RENK_MAP.amber;
+                const isDragging = draggedIndex === idx;
                 return (
-                  <tr key={k.id} className={`hover:bg-gray-50/50 transition-colors ${!k.aktif ? 'opacity-50' : ''}`}>
+                  <tr
+                    key={k.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, idx)}
+                    onDragOver={(e) => handleDragOver(e, idx)}
+                    onDrop={(e) => handleDrop(e, idx)}
+                    onDragEnd={handleDragEnd}
+                    className={`hover:bg-gray-50/50 transition-colors ${!k.aktif ? 'opacity-50' : ''} ${
+                      isDragging ? 'bg-amber-50/50 border-y-2 border-dashed border-amber-300' : ''
+                    }`}
+                  >
+                    <td className="px-3 py-3 text-center cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600">
+                      <GripVertical size={16} className="mx-auto" />
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`inline-block w-3.5 h-3.5 rounded-full ${renkObj.dot}`} />
                     </td>
                     <td className="px-4 py-3 font-bold text-gray-800">{k.etiket}</td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-500">{k.ad}</td>
-                    <td className="px-4 py-3 text-center text-gray-500">{k.sira}</td>
+                    <td className="px-4 py-3 text-center text-gray-500 font-bold">{k.sira}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-block w-2 h-2 rounded-full ${k.aktif ? 'bg-emerald-400' : 'bg-gray-300'}`} />
                     </td>
@@ -516,7 +603,7 @@ function KategorilerPaneli() {
         <KategoriModal
           kategori={modal === 'ekle' ? null : modal}
           onClose={() => setModal(null)}
-          onSave={() => { setModal(null); yukle(); }}
+          onSave={() => { setModal(null); yukle(); if (onRefresh) onRefresh(); }}
         />
       )}
 
@@ -575,6 +662,14 @@ export function Urunler() {
   const handleToggleAktif = async (urun) => {
     try {
       await axios.put(`${API_BASE}/urunler/${urun.id}`, { aktif: !urun.aktif });
+      yukle();
+    } catch { /* ignore */ }
+  };
+
+  const handleToggleMobilAktif = async (urun) => {
+    try {
+      const guncel = urun.mobil_aktif === false ? true : false;
+      await axios.put(`${API_BASE}/urunler/${urun.id}`, { mobil_aktif: guncel });
       yukle();
     } catch { /* ignore */ }
   };
@@ -661,7 +756,7 @@ export function Urunler() {
       </div>
 
       {/* Kategoriler Sekmesi */}
-      {aktifSekme === 'kategoriler' && <KategorilerPaneli />}
+      {aktifSekme === 'kategoriler' && <KategorilerPaneli onRefresh={yukle} />}
 
       {/* Ürünler Sekmesi */}
       {aktifSekme === 'urunler' && (
@@ -689,6 +784,7 @@ export function Urunler() {
                     <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Birim</th>
                     <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Milyem / Has</th>
                     <th className="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Aktif</th>
+                    <th className="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase tracking-wider">Tablet</th>
                     <th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">İşlem</th>
                   </tr>
                 </thead>
@@ -735,6 +831,18 @@ export function Urunler() {
                             {u.aktif
                               ? <ToggleRight size={22} className="text-emerald-500" />
                               : <ToggleLeft size={22} className="text-gray-300" />}
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => handleToggleMobilAktif(u)}
+                            className="transition-all hover:scale-110 active:scale-95"
+                            title={u.mobil_aktif !== false ? 'Tablette Gösteriliyor' : 'Tablette Gösterilmiyor'}
+                          >
+                            <Tablet
+                              size={18}
+                              className={`mx-auto stroke-[2.5] ${u.mobil_aktif !== false ? 'text-emerald-500 fill-emerald-500/10' : 'text-gray-300'}`}
+                            />
                           </button>
                         </td>
                         <td className="px-4 py-3">
