@@ -51,8 +51,18 @@ export const ToptanciDetay = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { kurlar } = useMarket();
+  
+  const todayStr = React.useMemo(() => {
+    const d = new Date();
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+      .toISOString()
+      .split('T')[0];
+  }, []);
+
   const [data, setData] = useState({ toptanci: null, islemler: [] });
   const [loading, setLoading] = useState(true);
+  const [activePeriod, setActivePeriod] = useState('total'); // 'total' | 'today' | 'week' | 'month' | 'custom'
+  const [customRange, setCustomRange] = useState({ start: todayStr, end: todayStr });
   
   // Ürünler Listesi (DB'den çekilecek)
   const [urunlerListesi, setUrunlerListesi] = useState([]);
@@ -65,13 +75,6 @@ export const ToptanciDetay = () => {
   // Modal State
   const [modalAcik, setModalAcik] = useState(false);
   const [faturaNotu, setFaturaNotu] = useState('');
-
-  const todayStr = React.useMemo(() => {
-    const d = new Date();
-    return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
-      .toISOString()
-      .split('T')[0];
-  }, []);
 
   const [expandedDates, setExpandedDates] = useState({});
 
@@ -156,6 +159,24 @@ export const ToptanciDetay = () => {
     }
   };
 
+  const handlePdfDownload = () => {
+    let params = new URLSearchParams();
+    if (activePeriod === 'today') {
+      params.append('start_date', todayStr);
+      params.append('end_date', todayStr);
+    } else if (activePeriod === 'week') {
+      params.append('gunler', '7');
+    } else if (activePeriod === 'month') {
+      params.append('gunler', '30');
+    } else if (activePeriod === 'custom' && customRange.start && customRange.end) {
+      params.append('start_date', customRange.start);
+      params.append('end_date', customRange.end);
+    }
+
+    const url = `${API_BASE}/toptancilar/${id}/rapor/pdf?${params.toString()}`;
+    window.open(url, '_blank');
+  };
+
   const fetchUrunler = async () => {
     try {
       const [urunRes, katRes] = await Promise.all([
@@ -224,13 +245,45 @@ export const ToptanciDetay = () => {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [modalAcik, urunSeciciAcik, kalemler, faturaNotu]);
 
-  // Arama filtresi uygulanmış işlemler
+  // Arama ve Tarih filtresi uygulanmış işlemler
   const filtreliIslemler = React.useMemo(() => {
-    const islemlerList = data?.islemler || [];
-    if (!arama) return islemlerList;
+    let list = data?.islemler || [];
+
+    // 1. Tarih Filtreleme
+    if (activePeriod === 'today') {
+      list = list.filter(islem => islem.islem_tarihi?.split('T')[0] === todayStr);
+    } else if (activePeriod === 'week') {
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      const weekAgoStr = new Date(weekAgo.getTime() - weekAgo.getTimezoneOffset() * 60000)
+        .toISOString()
+        .split('T')[0];
+      list = list.filter(islem => {
+        const d = islem.islem_tarihi?.split('T')[0];
+        return d >= weekAgoStr && d <= todayStr;
+      });
+    } else if (activePeriod === 'month') {
+      const monthAgo = new Date();
+      monthAgo.setDate(monthAgo.getDate() - 30);
+      const monthAgoStr = new Date(monthAgo.getTime() - monthAgo.getTimezoneOffset() * 60000)
+        .toISOString()
+        .split('T')[0];
+      list = list.filter(islem => {
+        const d = islem.islem_tarihi?.split('T')[0];
+        return d >= monthAgoStr && d <= todayStr;
+      });
+    } else if (activePeriod === 'custom' && customRange.start && customRange.end) {
+      list = list.filter(islem => {
+        const d = islem.islem_tarihi?.split('T')[0];
+        return d >= customRange.start && d <= customRange.end;
+      });
+    }
+
+    // 2. Arama Filtreleme
+    if (!arama) return list;
     const q = arama.toLowerCase();
     
-    return islemlerList.filter(islem => {
+    return list.filter(islem => {
       const tipMatch = islem.islem_tipi.toLowerCase().includes(q);
       const detayMatch = islem.islem_detayi.toLowerCase().includes(q);
       const aciklamaMatch = islem.aciklama && islem.aciklama.toLowerCase().includes(q);
@@ -241,7 +294,7 @@ export const ToptanciDetay = () => {
       
       return tipMatch || detayMatch || aciklamaMatch || dateMatch;
     });
-  }, [data?.islemler, arama]);
+  }, [data?.islemler, activePeriod, customRange, arama, todayStr]);
 
   // Çift sütun için listeler
   const solSayfaList = React.useMemo(() => filtreliIslemler.filter(i => i.islem_tipi === 'Borçlanma'), [filtreliIslemler]);
@@ -827,6 +880,59 @@ export const ToptanciDetay = () => {
             <Calculator size={14} /> Yeni İşlem Gir
           </button>
         </div>
+      </div>
+
+      {/* Tarih Filtreleme ve PDF İndirme Barı */}
+      <div className="bg-white px-4 py-3 border border-ink-150 border-t-0 -mt-6 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {[
+            { key: 'total', label: 'Tüm Zamanlar' },
+            { key: 'today', label: 'Bugün' },
+            { key: 'week', label: 'Son 7 Gün' },
+            { key: 'month', label: 'Son 30 Gün' },
+            { key: 'custom', label: 'Özel Tarih' }
+          ].map(p => (
+            <button
+              key={p.key}
+              onClick={() => setActivePeriod(p.key)}
+              className={`px-3 py-1.5 text-xs font-bold transition-all ${
+                activePeriod === p.key
+                  ? 'bg-gold-500 text-white shadow-sm shadow-gold-500/10'
+                  : 'bg-ink-50 hover:bg-ink-100 text-ink-700'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+
+          {activePeriod === 'custom' && (
+            <div className="flex items-center gap-2 ml-2 transition-all">
+              <input
+                type="date"
+                className="bg-ink-50 border border-ink-200 px-2 py-1 text-xs font-semibold text-ink-900 outline-none focus:border-gold-500"
+                value={customRange.start}
+                onChange={e => setCustomRange(prev => ({ ...prev, start: e.target.value }))}
+              />
+              <span className="text-xs text-ink-400 font-bold">➔</span>
+              <input
+                type="date"
+                className="bg-ink-50 border border-ink-200 px-2 py-1 text-xs font-semibold text-ink-900 outline-none focus:border-gold-500"
+                value={customRange.end}
+                onChange={e => setCustomRange(prev => ({ ...prev, end: e.target.value }))}
+              />
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={handlePdfDownload}
+          className="flex items-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 text-xs font-black tracking-wide transition-all active:scale-95 shadow-md shadow-rose-600/10 self-stretch md:self-auto justify-center"
+        >
+          <svg className="w-3.5 h-3.5 fill-white" viewBox="0 0 24 24">
+            <path d="M12 16l-4-4h3V4h2v8h3l-4 4zm9-4v6H3v-6H1v6c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2v-6h-2z"/>
+          </svg>
+          PDF EKSTRE İNDİR
+        </button>
       </div>
 
       {/* ─── GÖRÜNÜM 1: ÇİFT SÜTUN KLASİK KUYUMCU DEFTERİ (T-ACCOUNT) ─── */}

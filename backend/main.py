@@ -2176,3 +2176,212 @@ def toptanci_islem_sil(islem_id: int):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
+@app.get("/toptancilar/{toptanci_id}/rapor/pdf")
+def generate_toptanci_pdf_report(
+    toptanci_id: int,
+    gunler: int | None = Query(None),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
+):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        # 1. Toptancı bilgilerini ve güncel bakiyesini çek
+        cursor.execute("""
+            SELECT id, unvan, telefon, aciklama,
+                   (SELECT COALESCE(SUM(has_altin),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_has,
+                   (SELECT COALESCE(SUM(tl_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_tl
+            FROM toptancilar WHERE id = %s
+        """, (toptanci_id, toptanci_id, toptanci_id))
+        t_row = cursor.fetchone()
+        if not t_row:
+            raise HTTPException(status_code=404, detail="Toptancı bulunamadı")
+            
+        unvan = t_row[1]
+        telefon = t_row[2] or "Belirtilmemiş"
+        aciklama_genel = t_row[3] or "Açıklama yok"
+        bakiye_has = float(t_row[4])
+        bakiye_tl = float(t_row[5])
+        
+        # 2. İşlemleri filtreyle çek
+        query = """
+            SELECT id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama, islem_tarihi
+            FROM toptanci_islemler
+            WHERE toptanci_id = %s
+        """
+        params = [toptanci_id]
+        
+        if start_date and end_date:
+            if start_date == end_date:
+                query += " AND islem_tarihi::date = %s"
+                params.append(start_date)
+            else:
+                query += " AND islem_tarihi::date BETWEEN %s AND %s"
+                params.extend([start_date, end_date])
+        elif start_date:
+            query += " AND islem_tarihi::date = %s"
+            params.append(start_date)
+        elif gunler is not None:
+            query += " AND islem_tarihi >= NOW() - (%s * INTERVAL '1 day')"
+            params.append(gunler)
+            
+        query += " ORDER BY islem_tarihi DESC"
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        
+        # 3. Kapsam ve özet hesaplamalar
+        if start_date and end_date and start_date != end_date:
+            rapor_kapsami = f"{start_date} - {end_date}"
+        elif start_date:
+            rapor_kapsami = f"{start_date} (Tek Gün)"
+        elif gunler:
+            rapor_kapsami = f"Son {gunler} Gün"
+        else:
+            rapor_kapsami = "Tüm İşlemler"
+            
+        # Dönem toplamları
+        period_has = sum(float(r[3] or 0) for r in rows)
+        period_tl = sum(float(r[4] or 0) for r in rows)
+        
+        # PDF oluşturma
+        pdf = CorporatePDF()
+        pdf.set_auto_page_break(auto=True, margin=20)
+        pdf.add_page()
+        
+        font_candidates = [
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\Arial.ttf",
+            r"C:\Windows\Fonts\calibri.ttf",
+        ]
+        font_path = next((p for p in font_candidates if os.path.exists(p)), None)
+        if not font_path:
+            raise RuntimeError("Unicode font bulunamadı.")
+        pdf.add_font("Corporate", "", font_path, uni=True)
+        
+        # --- BAŞLIK KISMI ---
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_font("Corporate", "", 16)
+        pdf.cell(0, 8, "ÇAPAR KUYUMCULUK", ln=1, align="L")
+        
+        pdf.set_font("Corporate", "", 10)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 5, f"TOPTANCI HESAP EKSTRESİ ({unvan.upper()})", ln=1, align="L")
+        
+        # Sağ üst kapsam ve tarih bilgisi
+        current_y = pdf.get_y()
+        pdf.set_xy(10, 10)
+        pdf.set_font("Corporate", "", 9)
+        pdf.cell(0, 8, f"Filtre Kapsamı: {rapor_kapsami}", ln=1, align="R")
+        pdf.cell(0, 5, f"Çıktı Tarihi: {time.strftime('%d.%m.%Y %H:%M')}", ln=1, align="R")
+        pdf.set_y(current_y + 8)
+        
+        # Toptancı Bilgileri Kartı (Telefon vb.)
+        pdf.set_draw_color(226, 232, 240)
+        pdf.set_fill_color(248, 250, 252)
+        pdf.set_text_color(71, 85, 105)
+        pdf.set_font("Corporate", "", 9)
+        pdf.cell(0, 8, f"Telefon: {telefon}  |  Açıklama: {aciklama_genel}", border=1, fill=True, ln=1, align="L")
+        pdf.ln(4)
+        
+        # --- ÖZET KARTLARI (KPI) ---
+        pdf.set_font("Corporate", "", 9)
+        
+        # Kart 1: Dönem Değişimi (Filtreli dönem toplamı)
+        pdf.set_draw_color(191, 219, 254)
+        pdf.set_fill_color(239, 246, 255)
+        pdf.set_text_color(30, 64, 175)
+        
+        has_period_str = f"{period_has:+.3f} gr Has".replace("+", "+ ") if period_has >= 0 else f"{period_has:.3f} gr Has"
+        tl_period_str = f"{period_tl:+,.2f} TL".replace(",", ".").replace("+", "+ ") if period_tl >= 0 else f"{period_tl:,.2f} TL".replace(",", ".")
+        period_metin = f"Dönem Has: {has_period_str}  |  Dönem TL: {tl_period_str}"
+        pdf.cell(92, 10, period_metin, border=1, fill=True, align="C")
+        
+        pdf.cell(6, 10, "", border=0) # İki kutu arası yatay boşluk
+        
+        # Kart 2: Güncel Genel Bakiye
+        pdf.set_draw_color(212, 175, 55)
+        pdf.set_fill_color(253, 250, 237)
+        pdf.set_text_color(180, 130, 20)
+        
+        bakiye_has_str = f"{bakiye_has:+.3f} gr Has".replace("+", "+ ") if bakiye_has >= 0 else f"{bakiye_has:.3f} gr Has"
+        bakiye_tl_str = f"{bakiye_tl:+,.2f} TL".replace(",", ".").replace("+", "+ ") if bakiye_tl >= 0 else f"{bakiye_tl:,.2f} TL".replace(",", ".")
+        bakiye_metin = f"Güncel Has: {bakiye_has_str}  |  Güncel TL: {bakiye_tl_str}"
+        pdf.cell(92, 10, bakiye_metin, border=1, fill=True, ln=1, align="C")
+        pdf.ln(6)
+        
+        # --- TABLO BAŞLIKLARI ---
+        headers = ["Tarih", "İşlem", "Detay", "Has Altın (gr)", "TL Tutar", "Açıklama"]
+        widths  = [32, 20, 35, 25, 28, 50]
+        
+        pdf.set_fill_color(241, 245, 249) # Tablo başlık arkaplanı
+        pdf.set_draw_color(203, 213, 225)
+        pdf.set_text_color(71, 85, 105)
+        pdf.set_font("Corporate", "", 9)
+        
+        for i, h in enumerate(headers):
+            pdf.cell(widths[i], 9, h, border="B", align="L" if i in [0, 1, 2, 5] else "R", fill=True)
+        pdf.ln()
+        
+        # --- TABLO İÇERİĞİ ---
+        pdf.set_font("Corporate", "", 8)
+        pdf.set_draw_color(241, 245, 249) # İnce satır alt çizgisi
+        
+        fill = False
+        for r in rows:
+            # r: [id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama, islem_tarihi]
+            t_str = r[6].strftime("%d.%m.%Y %H:%M") if r[6] else "-"
+            tip = str(r[1])
+            detay = str(r[2] or "-")
+            has_val = float(r[3] or 0)
+            tl_val = float(r[4] or 0)
+            aciklama = str(r[5] or "-")
+            
+            # Değerleri formatla
+            if has_val != 0:
+                has_str = f"{has_val:+.3f} gr".replace("+", "+ ") if has_val >= 0 else f"{has_val:.3f} gr"
+            else:
+                has_str = "-"
+                
+            if tl_val != 0:
+                tl_str = f"{tl_val:+,.2f} TL".replace("+", "+ ").replace(",", "X").replace(".", ",").replace("X", ".") if tl_val >= 0 else f"{tl_val:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
+            else:
+                tl_str = "-"
+                
+            vals = [t_str, tip, detay, has_str, tl_str, aciklama]
+            
+            pdf.set_fill_color(248, 250, 252) if fill else pdf.set_fill_color(255, 255, 255)
+            
+            for i, val in enumerate(vals):
+                if i == 1: # İşlem Tipi Hücresi Renklendirme
+                    if tip == "Borçlanma":
+                        pdf.set_text_color(239, 68, 68) # Kırmızı
+                    else:
+                        pdf.set_text_color(16, 185, 129) # Yeşil
+                elif i in [3, 4] and val != "-": # Has / Tutar Sütunları
+                    if val.startswith("-"):
+                        pdf.set_text_color(16, 185, 129) # Yeşil
+                    else:
+                        pdf.set_text_color(239, 68, 68) # Kırmızı
+                else:
+                    pdf.set_text_color(51, 65, 85) # Koyu Gri
+                    
+                align = "L" if i in [0, 1, 2, 5] else "R"
+                pdf.cell(widths[i], 8, val, border="B", align=align, fill=fill)
+            
+            pdf.ln()
+            fill = not fill
+            
+        report_path = f"toptanci_raporu_{toptanci_id}_{int(time.time())}.pdf"
+        pdf.output(report_path)
+        return FileResponse(report_path, filename=f"Capar_Kuyumculuk_{unvan.replace(' ', '_')}_Hesap_Ekstresi.pdf")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF oluşturulamadı: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
