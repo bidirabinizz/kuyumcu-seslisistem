@@ -120,6 +120,10 @@ function DailyKurPrompt() {
 
   useEffect(() => {
     if (location.pathname === '/kasa') return;
+    if (location.pathname === '/login') return;
+
+    const loggedIn = localStorage.getItem('adminLoggedIn') === 'true';
+    if (!loggedIn) return;
 
     const today = new Date().toISOString().split('T')[0];
     const lastPromptDate = localStorage.getItem('daily_kur_prompt_last_date');
