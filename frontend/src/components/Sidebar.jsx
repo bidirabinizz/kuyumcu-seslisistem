@@ -92,8 +92,19 @@ export const Sidebar = ({ closeMobileMenu, mobileOpen }) => {
         </nav>
 
         {/* Footer */}
-        <div className="px-6 py-5 border-t border-white/5">
-          <p className="text-[10px] text-ink-600 font-mono">v2.1.0 · 2026</p>
+        <div className="px-6 py-5 border-t border-white/5 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.removeItem('adminLoggedIn');
+              localStorage.removeItem('adminEmail');
+              window.location.href = '/login';
+            }}
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 active:scale-95 transition-all text-xs font-bold text-rose-400"
+          >
+            Çıkış Yap
+          </button>
+          <p className="text-[10px] text-ink-600/40 font-mono text-center mt-1">v2.1.0 · 2026</p>
         </div>
       </aside>
     </>

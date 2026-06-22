@@ -16,6 +16,48 @@ import './index.css';
 
 import { Toptancilar }    from './pages/Toptancilar';
 import { ToptanciDetay }  from './pages/ToptanciDetay';
+import { Login }          from './pages/Login';
+
+function ProtectedAdminLayout({ children, mobileOpen, setMobileOpen }) {
+  const navigate = useNavigate();
+  const loggedIn = localStorage.getItem('adminLoggedIn') === 'true';
+
+  useEffect(() => {
+    if (!loggedIn) {
+      navigate('/login');
+    }
+  }, [loggedIn, navigate]);
+
+  if (!loggedIn) return null;
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-ink-50">
+      <Sidebar
+        mobileOpen={mobileOpen}
+        closeMobileMenu={() => setMobileOpen(false)}
+      />
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Mobile topbar */}
+        <div className="lg:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-ink-100 shadow-sm">
+          <button
+            id="mobile-menu-toggle"
+            onClick={() => setMobileOpen(true)}
+            className="w-9 h-9 rounded-sm bg-ink-50 flex items-center justify-center text-ink-600 premium-border"
+          >
+            <Menu size={18} />
+          </button>
+          <span className="font-display font-black text-ink-900">ÇAPAR ERP</span>
+        </div>
+
+        <LiveTicker />
+        <main className="flex-1 overflow-y-auto">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -27,6 +69,9 @@ export default function App() {
         <Analytics />
         <DailyKurPrompt />
         <Routes>
+          {/* ── Giriş Ekranı ── */}
+          <Route path="/login" element={<Login />} />
+
           {/* ── Kasa Ekranı — tam ekran, sidebar YOK ── */}
           <Route path="/kasa" element={
             <ErrorBoundary>
@@ -34,55 +79,33 @@ export default function App() {
             </ErrorBoundary>
           } />
 
-          {/* ── Admin Paneli — sidebar ile ── */}
+          {/* ── Admin Paneli — sidebar ile (Korumalı) ── */}
           <Route path="*" element={
-            <div className="flex h-screen overflow-hidden bg-ink-50">
-              <Sidebar
-                mobileOpen={mobileOpen}
-                closeMobileMenu={() => setMobileOpen(false)}
-              />
-
-              <div className="flex-1 flex flex-col overflow-hidden">
-                {/* Mobile topbar */}
-                <div className="lg:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-ink-100 shadow-sm">
-                  <button
-                    id="mobile-menu-toggle"
-                    onClick={() => setMobileOpen(true)}
-                    className="w-9 h-9 rounded-sm bg-ink-50 flex items-center justify-center text-ink-600 premium-border"
-                  >
-                    <Menu size={18} />
-                  </button>
-                  <span className="font-display font-black text-ink-900">ÇAPAR ERP</span>
-                </div>
-
-                <LiveTicker />
-                <main className="flex-1 overflow-y-auto">
-                  <Routes>
-                    <Route path="/" element={
-                      <ErrorBoundary><Dashboard /></ErrorBoundary>
-                    } />
-                    <Route path="/toptancilar" element={
-                      <ErrorBoundary><Toptancilar /></ErrorBoundary>
-                    } />
-                    <Route path="/toptancilar/:id" element={
-                      <ErrorBoundary><ToptanciDetay /></ErrorBoundary>
-                    } />
-                    <Route path="/kullanicilar" element={
-                      <ErrorBoundary><Kullanicilar /></ErrorBoundary>
-                    } />
-                    <Route path="/urunler" element={
-                      <ErrorBoundary><Urunler /></ErrorBoundary>
-                    } />
-                    <Route path="/raporlar" element={
-                      <ErrorBoundary><Raporlar /></ErrorBoundary>
-                    } />
-                    <Route path="/ayarlar" element={
-                      <ErrorBoundary><Ayarlar /></ErrorBoundary>
-                    } />
-                  </Routes>
-                </main>
-              </div>
-            </div>
+            <ProtectedAdminLayout mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
+              <Routes>
+                <Route path="/" element={
+                  <ErrorBoundary><Dashboard /></ErrorBoundary>
+                } />
+                <Route path="/toptancilar" element={
+                  <ErrorBoundary><Toptancilar /></ErrorBoundary>
+                } />
+                <Route path="/toptancilar/:id" element={
+                  <ErrorBoundary><ToptanciDetay /></ErrorBoundary>
+                } />
+                <Route path="/kullanicilar" element={
+                  <ErrorBoundary><Kullanicilar /></ErrorBoundary>
+                } />
+                <Route path="/urunler" element={
+                  <ErrorBoundary><Urunler /></ErrorBoundary>
+                } />
+                <Route path="/raporlar" element={
+                  <ErrorBoundary><Raporlar /></ErrorBoundary>
+                } />
+                <Route path="/ayarlar" element={
+                  <ErrorBoundary><Ayarlar /></ErrorBoundary>
+                } />
+              </Routes>
+            </ProtectedAdminLayout>
           } />
         </Routes>
       </BrowserRouter>

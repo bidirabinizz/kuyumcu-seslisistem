@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import hashlib
 import threading
 import traceback
 from contextlib import asynccontextmanager
@@ -586,6 +587,25 @@ def db_tablolari_hazirla():
                 islem_tarihi       TIMESTAMP DEFAULT NOW()
             )
         """)
+
+        # 7.5. Yonetici Tablosu & Seed
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS yonetici (
+                id         SERIAL PRIMARY KEY,
+                email      VARCHAR(150) UNIQUE NOT NULL,
+                sifre_hash VARCHAR(255) NOT NULL
+            )
+        """)
+        cursor.execute("SELECT COUNT(*) FROM yonetici")
+        y_count = cursor.fetchone()[0]
+        if y_count == 0:
+            default_email = "admin@caparkuyumculuk.com"
+            default_pass_hash = hashlib.sha256("admin".encode("utf-8")).hexdigest()
+            cursor.execute(
+                "INSERT INTO yonetici (email, sifre_hash) VALUES (%s, %s)",
+                (default_email, default_pass_hash)
+            )
+            print("[DB] Varsayılan yönetici hesabı eklendi (admin@caparkuyumculuk.com / admin).")
 
         # 8. Personeller Seed
         cursor.execute("SELECT COUNT(*) FROM personeller")
@@ -2390,6 +2410,79 @@ def generate_toptanci_pdf_report(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF oluşturulamadı: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ─────────────────────────────────────────────
+# ADMİN GİRİŞ VE GÜVENLİK SİSTEMİ
+# ─────────────────────────────────────────────
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+class ChangePasswordPayload(BaseModel):
+    email: str
+    current_password: str
+    new_password: str
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+@app.post("/api/auth/login")
+def auth_login(payload: LoginPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        email_clean = payload.email.lower().strip()
+        cursor.execute("SELECT sifre_hash FROM yonetici WHERE email = %s", (email_clean,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı")
+            
+        hashed = hash_password(payload.password)
+        if row[0] != hashed:
+            raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı")
+            
+        return {"success": True, "email": email_clean}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.post("/api/auth/change-password")
+def auth_change_password(payload: ChangePasswordPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        email_clean = payload.email.lower().strip()
+        cursor.execute("SELECT sifre_hash FROM yonetici WHERE email = %s", (email_clean,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Yönetici bulunamadı")
+            
+        hashed_current = hash_password(payload.current_password)
+        if row[0] != hashed_current:
+            raise HTTPException(status_code=400, detail="Mevcut şifre hatalı")
+            
+        hashed_new = hash_password(payload.new_password)
+        cursor.execute("UPDATE yonetici SET sifre_hash = %s WHERE email = %s", (hashed_new, email_clean))
+        conn.commit()
+        
+        return {"success": True, "mesaj": "Şifre başarıyla değiştirildi"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
