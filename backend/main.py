@@ -11,8 +11,10 @@ import psycopg2
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 import socket
 import time
+from datetime import datetime
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -351,6 +353,14 @@ class PersonelPayload(BaseModel):
     tetikleme_kelimesi: str
     rol: str
 
+class UrunStokModel(BaseModel):
+    urun_id: int
+    kod: str
+    ozellikler: Optional[str] = ""
+    maliyet_usd: Optional[float] = 0.0
+    satis_fiyati: float
+    para_birimi: str = "USD"
+
 class IslemPayload(BaseModel):
     personel_id: int
     islem_tipi: str      # "ALIS" veya "SATIS"
@@ -367,7 +377,25 @@ class IslemPayload(BaseModel):
     urun_adi: str | None = None   # Görüntüleme için ürün adı
     doviz_tutar: float = 0.0      # Döviz tutarı (USD/EUR ise)
     doviz_kuru: float = 1.0       # Döviz kuru
+    urun_stok_id: int | None = None # Pırlanta/Saat satışı ise seçilen stok kodu id'si
 
+
+class UrunStokPayload(BaseModel):
+    urun_id: int
+    kod: str
+    ozellikler: str | None = None
+    maliyet_usd: float = 0.0
+    satis_fiyati: float
+    para_birimi: str = "USD"
+    satildi_mi: bool = False
+
+class UrunStokGuncellePayload(BaseModel):
+    kod: str | None = None
+    ozellikler: str | None = None
+    maliyet_usd: float | None = None
+    satis_fiyati: float | None = None
+    para_birimi: str | None = None
+    satildi_mi: bool | None = None
 
 class UrunPayload(BaseModel):
     ad: str
@@ -375,13 +403,33 @@ class UrunPayload(BaseModel):
     urun_kategorisi: str   # "ALTIN" | "SARRAFIYE" | "PIRLANTA"
     islem_birimi: str = "GRAM"
     milyem: float = 0.0
+    alis_milyem: float = 0.0
+    satis_milyem: float = 0.0
     has_karsiligi: float = 0.0
     renk: str = "amber"    # UI renk ipucu: amber | yellow | orange | red | purple | blue
     sira: int = 0
     aktif: bool = True
     urun_grubu: str | None = "Diğer"
     mobil_aktif: bool = True
+    favori: bool = False
+    stok_takibi: bool = False
 
+class UrunGuncellePayload(BaseModel):
+    ad: str | None = None
+    urun_cinsi: str | None = None
+    urun_kategorisi: str | None = None
+    islem_birimi: str | None = None
+    milyem: float | None = None
+    alis_milyem: float | None = None
+    satis_milyem: float | None = None
+    has_karsiligi: float | None = None
+    renk: str | None = None
+    sira: int | None = None
+    aktif: bool | None = None
+    urun_grubu: str | None = None
+    mobil_aktif: bool | None = None
+    favori: bool | None = None
+    stok_takibi: bool | None = None
 
 class KategoriPayload(BaseModel):
     ad: str          # Örn: "BEYAZ_ALTIN"
@@ -396,21 +444,6 @@ class KategoriGuncellePayload(BaseModel):
     renk: str | None = None
     sira: int | None = None
     aktif: bool | None = None
-
-
-class UrunGuncellePayload(BaseModel):
-    ad: str | None = None
-    urun_cinsi: str | None = None
-    urun_kategorisi: str | None = None
-    islem_birimi: str | None = None
-    milyem: float | None = None
-    has_karsiligi: float | None = None
-    renk: str | None = None
-    sira: int | None = None
-    aktif: bool | None = None
-    urun_grubu: str | None = None
-    mobil_aktif: bool | None = None
-
 
 def normalize_tetikleme_kelimesi(kelime: str) -> str:
     return kelime.strip().lower()
@@ -497,7 +530,22 @@ def db_tablolari_hazirla():
         cursor.execute("""
             ALTER TABLE urunler ADD COLUMN IF NOT EXISTS urun_grubu VARCHAR(100) DEFAULT 'Diğer';
         """)
-        
+        cursor.execute("""
+            ALTER TABLE urunler ADD COLUMN IF NOT EXISTS favori BOOLEAN DEFAULT FALSE;
+        """)
+        cursor.execute("""
+            ALTER TABLE urunler ADD COLUMN IF NOT EXISTS stok_takibi BOOLEAN DEFAULT FALSE;
+        """)
+        cursor.execute("""
+            ALTER TABLE urunler ADD COLUMN IF NOT EXISTS alis_milyem NUMERIC(8,4) DEFAULT 0;
+        """)
+        cursor.execute("""
+            ALTER TABLE urunler ADD COLUMN IF NOT EXISTS satis_milyem NUMERIC(8,4) DEFAULT 0;
+        """)
+        cursor.execute("""
+            UPDATE urunler SET stok_takibi = TRUE WHERE urun_kategorisi = 'PIRLANTA';
+        """)
+
         # 4. Günlük Kurlar Tablosu
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS gunluk_kurlar (
@@ -515,6 +563,31 @@ def db_tablolari_hazirla():
         """)
         cursor.execute("""
             ALTER TABLE islemler ADD COLUMN IF NOT EXISTS doviz_kuru NUMERIC(10,4) DEFAULT 1;
+        """)
+        
+        # --- Toptancı İşlemleri için Döviz ---
+        cursor.execute("""
+            ALTER TABLE toptanci_islemler ADD COLUMN IF NOT EXISTS usd_tutar NUMERIC(15,2) DEFAULT 0;
+        """)
+        cursor.execute("""
+            ALTER TABLE toptanci_islemler ADD COLUMN IF NOT EXISTS eur_tutar NUMERIC(15,2) DEFAULT 0;
+        """)
+
+        # --- Müşteriler ve Müşteri İşlemleri (Emanet) ---
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS musteri_emanetler (
+                id SERIAL PRIMARY KEY,
+                musteri_adi VARCHAR(200) NOT NULL,
+                telefon VARCHAR(50),
+                not_detayi TEXT,
+                teslim_edildi_mi BOOLEAN DEFAULT FALSE,
+                teslim_tarihi TIMESTAMP,
+                olusturulma_tarihi TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        
+        cursor.execute("""
+            ALTER TABLE musteri_emanetler ADD COLUMN IF NOT EXISTS kategori VARCHAR(50) DEFAULT 'Genel';
         """)
         
         # 5. Kategoriler Tablosu
@@ -557,12 +630,6 @@ def db_tablolari_hazirla():
             ALTER TABLE urunler ADD COLUMN IF NOT EXISTS mobil_aktif BOOLEAN DEFAULT TRUE;
         """)
 
-        # toptanci_islemler tablosunda islem_detayi kolonu VARCHAR(250) genişlet
-        cursor.execute("""
-            ALTER TABLE toptanci_islemler 
-            ALTER COLUMN islem_detayi TYPE VARCHAR(250);
-        """)
-
         # 6. Toptancılar Tablosu
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS toptancilar (
@@ -588,7 +655,34 @@ def db_tablolari_hazirla():
             )
         """)
 
-        # 7.5. Yonetici Tablosu & Seed
+        # 7.5. Ürün Stok Tablosu (Örn: Pırlanta, Saat vb. barkodlu ürünler için)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'pirlanta_stok') THEN
+                    ALTER TABLE pirlanta_stok RENAME TO urun_stok;
+                END IF;
+                CREATE TABLE IF NOT EXISTS urun_stok (
+                    id             SERIAL PRIMARY KEY,
+                    urun_id        INTEGER REFERENCES urunler(id) ON DELETE CASCADE,
+                    kod            VARCHAR(100) UNIQUE NOT NULL,
+                    ozellikler     TEXT,
+                    maliyet_usd    NUMERIC(15,2) DEFAULT 0,
+                    satis_fiyati   NUMERIC(15,2) NOT NULL,
+                    satildi_mi     BOOLEAN DEFAULT FALSE,
+                    satildi_islem_id INTEGER REFERENCES islemler(id) ON DELETE SET NULL,
+                    eklenme_tarihi TIMESTAMP DEFAULT NOW()
+                );
+                IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'urun_stok' AND column_name = 'urun_id') THEN
+                    ALTER TABLE urun_stok ADD COLUMN urun_id INTEGER REFERENCES urunler(id) ON DELETE CASCADE;
+                END IF;
+                IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'urun_stok' AND column_name = 'para_birimi') THEN
+                    ALTER TABLE urun_stok ADD COLUMN para_birimi VARCHAR(10) DEFAULT 'USD';
+                END IF;
+            END $$;
+        """)
+
+        # 7.6. Yonetici Tablosu & Seed
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS yonetici (
                 id         SERIAL PRIMARY KEY,
@@ -832,7 +926,9 @@ def _query_islemler(conn, gunler=None, start_date=None, end_date=None, tip=None,
             COALESCE(i.odeme_tipi,     'NAKIT')   AS odeme_tipi,
             COALESCE(i.adet, 1)                   AS adet,
             COALESCE(i.doviz_tutar, 0)            AS doviz_tutar,
-            COALESCE(i.doviz_kuru, 1)             AS doviz_kuru
+            COALESCE(i.doviz_kuru, 1)             AS doviz_kuru,
+            (SELECT ad FROM urunler WHERE urun_cinsi = i.urun_cinsi LIMIT 1) AS urun_adi,
+            (SELECT kod FROM urun_stok WHERE satildi_islem_id = i.id LIMIT 1) AS stok_kodu
         FROM islemler i
         LEFT JOIN personeller p ON p.id = i.personel_id
         WHERE 1=1
@@ -895,17 +991,16 @@ def urunleri_getir(hepsi: bool = False):
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
+        select_cols = (
+            "id, ad, urun_cinsi, urun_kategorisi, islem_birimi, "
+            "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer'), "
+            "COALESCE(mobil_aktif, TRUE), COALESCE(favori, FALSE), COALESCE(stok_takibi, FALSE), "
+            "COALESCE(alis_milyem, 0), COALESCE(satis_milyem, 0)"
+        )
         if hepsi:
-            cursor.execute(
-                "SELECT id, ad, urun_cinsi, urun_kategorisi, islem_birimi, "
-                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer'), COALESCE(mobil_aktif, TRUE) FROM urunler ORDER BY sira ASC, id ASC"
-            )
+            cursor.execute(f"SELECT {select_cols} FROM urunler ORDER BY sira ASC, id ASC")
         else:
-            cursor.execute(
-                "SELECT id, ad, urun_cinsi, urun_kategorisi, islem_birimi, "
-                "milyem, has_karsiligi, renk, sira, aktif, COALESCE(urun_grubu, 'Diğer'), COALESCE(mobil_aktif, TRUE) FROM urunler "
-                "WHERE aktif = TRUE ORDER BY sira ASC, id ASC"
-            )
+            cursor.execute(f"SELECT {select_cols} FROM urunler WHERE aktif = TRUE ORDER BY sira ASC, id ASC")
         rows = cursor.fetchall()
         return [
             {
@@ -913,7 +1008,9 @@ def urunleri_getir(hepsi: bool = False):
                 "urun_kategorisi": r[3], "islem_birimi": r[4],
                 "milyem": float(r[5]), "has_karsiligi": float(r[6]),
                 "renk": r[7], "sira": r[8], "aktif": r[9],
-                "urun_grubu": r[10], "mobil_aktif": bool(r[11])
+                "urun_grubu": r[10], "mobil_aktif": bool(r[11]),
+                "favori": bool(r[12]), "stok_takibi": bool(r[13]),
+                "alis_milyem": float(r[14]), "satis_milyem": float(r[15])
             }
             for r in rows
         ]
@@ -932,15 +1029,15 @@ async def urun_ekle(payload: UrunPayload):
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO urunler
-               (ad, urun_cinsi, urun_kategorisi, islem_birimi, milyem, has_karsiligi, renk, sira, aktif, urun_grubu, mobil_aktif)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               (ad, urun_cinsi, urun_kategorisi, islem_birimi, milyem, alis_milyem, satis_milyem, has_karsiligi, renk, sira, aktif, urun_grubu, mobil_aktif, favori, stok_takibi)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (
                 payload.ad.strip(), payload.urun_cinsi.strip().upper(),
                 payload.urun_kategorisi.strip().upper(), payload.islem_birimi.strip().upper(),
-                payload.milyem, payload.has_karsiligi,
+                payload.milyem, payload.alis_milyem, payload.satis_milyem, payload.has_karsiligi,
                 payload.renk, payload.sira, payload.aktif,
-                (payload.urun_grubu or "Diğer").strip(), payload.mobil_aktif
+                (payload.urun_grubu or "Diğer").strip(), payload.mobil_aktif, payload.favori, payload.stok_takibi
             )
         )
         new_id = cursor.fetchone()[0]
@@ -969,9 +1066,11 @@ async def urun_guncelle(urun_id: int, payload: UrunGuncellePayload):
             "ad": payload.ad, "urun_cinsi": payload.urun_cinsi,
             "urun_kategorisi": payload.urun_kategorisi,
             "islem_birimi": payload.islem_birimi, "milyem": payload.milyem,
+            "alis_milyem": payload.alis_milyem, "satis_milyem": payload.satis_milyem,
             "has_karsiligi": payload.has_karsiligi, "renk": payload.renk,
             "sira": payload.sira, "aktif": payload.aktif,
-            "urun_grubu": payload.urun_grubu, "mobil_aktif": payload.mobil_aktif
+            "urun_grubu": payload.urun_grubu, "mobil_aktif": payload.mobil_aktif,
+            "favori": payload.favori, "stok_takibi": payload.stok_takibi
         }
         for alan, deger in alan_map.items():
             if deger is not None:
@@ -1301,8 +1400,19 @@ async def manuel_islem_ekle(payload: IslemPayload):
             ),
         )
         row_id = cursor.fetchone()[0]
+        
+        # Ürün Stok Güncellemesi (Eğer satılan bir pırlanta/saat ise ve stok id gelmişse)
+        if getattr(payload, 'urun_stok_id', None) is not None and islem_tipi == "SATIS":
+            cursor.execute(
+                "UPDATE urun_stok SET satildi_mi = TRUE, satildi_islem_id = %s WHERE id = %s",
+                (row_id, payload.urun_stok_id)
+            )
+            
         conn.commit()
         cursor.close()
+
+        if getattr(payload, 'urun_stok_id', None) is not None and islem_tipi == "SATIS":
+            await manager.broadcast_text(json.dumps({"type": "REFRESH_URUN_STOK"}))
 
         # 4. WebSocket ile Anlık Bildirim
         ws_payload = json.dumps({
@@ -1901,7 +2011,7 @@ def generate_pdf_report(
         # --- TABLO BAŞLIKLARI ---
         headers = ["Tarih", "Personel", "İşlem", "Ürün", "Miktar", "Has (gr)", "Tutar", "Ödeme Türü"]
         # Toplam genişlik = 190mm
-        widths  = [26, 30, 16, 22, 22, 20, 32, 22] 
+        widths  = [26, 24, 12, 40, 20, 18, 30, 20] 
         
         pdf.set_fill_color(241, 245, 249) # Tablo başlık arkaplanı
         pdf.set_draw_color(203, 213, 225)
@@ -1929,8 +2039,60 @@ def generate_pdf_report(
             t_str = row[1].strftime("%d.%m.%Y %H:%M") if row[1] else "-"
             personel = str(row[7])
             tip = "Satış" if row[2] == "SATIS" else "Alış"
-            urun = URUN_LABEL.get(row[3], str(row[3]))
             kategori = row[9]
+            urun_adi = row[15] if len(row) > 15 else None
+            stok_kodu = row[16] if len(row) > 16 else None
+            
+            if stok_kodu:
+                kat_upper = (kategori or "").strip().upper()
+                kat_map = {
+                    "PIRLANTA": "Pırlanta",
+                    "SAAT": "Saat",
+                    "SET": "Set",
+                    "ALTIN": "Altın",
+                    "SARRAFIYE": "Sarrafiye",
+                    "DÖVİZ": "Döviz",
+                    "DOVIZ": "Döviz"
+                }
+                kat_title = kat_map.get(kat_upper, kat_upper.capitalize())
+                urun = f"{kat_title} - {stok_kodu}"
+            else:
+                if urun_adi:
+                    urun = str(urun_adi)
+                else:
+                    cinsi = (row[3] or "").strip().upper()
+                    cinsi_map = {
+                        "24_AYAR": "24 Ayar",
+                        "22_AYAR": "22 Ayar",
+                        "18_AYAR": "18 Ayar",
+                        "14_AYAR": "14 Ayar",
+                        "CEYREK_ALTIN": "Çeyrek Altın",
+                        "YARIM_ALTIN": "Yarım Altın",
+                        "TAM_ALTIN": "Tam Altın",
+                        "ATA_ALTIN": "Ata Altın",
+                        "PIRLANTA": "Pırlanta",
+                        "USD": "Dolar (USD)",
+                        "EUR": "Euro (EUR)",
+                        "TRY": "Türk Lirası (TRY)"
+                    }
+                    if cinsi in cinsi_map:
+                        urun = cinsi_map[cinsi]
+                    else:
+                        words = cinsi.split("_")
+                        cleaned_words = []
+                        for w in words:
+                            if w == "AYAR":
+                                cleaned_words.append("Ayar")
+                            elif w == "BILEZIK":
+                                cleaned_words.append("Bilezik")
+                            elif w == "KOLYE":
+                                cleaned_words.append("Kolye")
+                            elif w == "ALTIN":
+                                cleaned_words.append("Altın")
+                            else:
+                                cleaned_words.append(w.capitalize())
+                        urun = " ".join(cleaned_words)
+                
             birim = row[10]
             odeme = "Kart" if row[11] == "KART" else "Nakit"
             
@@ -1994,17 +2156,22 @@ class ToptanciPayload(BaseModel):
     aciklama: str | None = None
 
 class ToptanciIslemPayload(BaseModel):
-    islem_tipi: str # "Borçlanma", "Ödeme" vb.
-    islem_detayi: str # "Nakit Ödeme", "Hurda Teslimi", "Mal Alış" vb.
+    islem_tipi: str
+    islem_detayi: str
     has_altin: float = 0.0
     tl_tutar: float = 0.0
+    usd_tutar: float = 0.0
+    eur_tutar: float = 0.0
     aciklama: str | None = None
+
 
 class CokluIslemKalemPayload(BaseModel):
     islem_tipi: str
     islem_detayi: str
     has_altin: float = 0.0
     tl_tutar: float = 0.0
+    usd_tutar: float = 0.0
+    eur_tutar: float = 0.0
 
 class ToptanciCokluIslemPayload(BaseModel):
     aciklama: str | None = None
@@ -2020,7 +2187,9 @@ def toptanci_listesi():
             SELECT 
                 t.id, t.unvan, t.telefon, t.aciklama, t.olusturulma_tarihi,
                 COALESCE(SUM(ti.has_altin), 0) AS bakiye_has,
-                COALESCE(SUM(ti.tl_tutar), 0) AS bakiye_tl
+                COALESCE(SUM(ti.tl_tutar), 0) AS bakiye_tl,
+                COALESCE(SUM(ti.usd_tutar), 0) AS bakiye_usd,
+                COALESCE(SUM(ti.eur_tutar), 0) AS bakiye_eur
             FROM toptancilar t
             LEFT JOIN toptanci_islemler ti ON t.id = ti.toptanci_id
             GROUP BY t.id
@@ -2032,7 +2201,7 @@ def toptanci_listesi():
         for r in rows:
             toptancilar.append({
                 "id": r[0], "unvan": r[1], "telefon": r[2], "aciklama": r[3],
-                "olusturulma_tarihi": r[4], "bakiye_has": float(r[5]), "bakiye_tl": float(r[6])
+                "olusturulma_tarihi": r[4], "bakiye_has": float(r[5]), "bakiye_tl": float(r[6]), "bakiye_usd": float(r[7]), "bakiye_eur": float(r[8])
             })
         return toptancilar
     except Exception as e:
@@ -2086,22 +2255,24 @@ def toptanci_islemleri_getir(toptanci_id: int):
         # Önce toptancı bilgilerini çek
         cursor.execute("""
             SELECT id, unvan, telefon, aciklama,
-                   (SELECT COALESCE(SUM(has_altin),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_has,
-                   (SELECT COALESCE(SUM(tl_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_tl
+                 (SELECT COALESCE(SUM(has_altin),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_has,
+                 (SELECT COALESCE(SUM(tl_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_tl,
+                 (SELECT COALESCE(SUM(usd_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_usd,
+                 (SELECT COALESCE(SUM(eur_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_eur
             FROM toptancilar WHERE id = %s
-        """, (toptanci_id, toptanci_id, toptanci_id))
+        """, (toptanci_id, toptanci_id, toptanci_id, toptanci_id, toptanci_id))
         t_row = cursor.fetchone()
         if not t_row:
             raise HTTPException(status_code=404, detail="Toptancı bulunamadı")
             
         toptanci = {
             "id": t_row[0], "unvan": t_row[1], "telefon": t_row[2], "aciklama": t_row[3],
-            "bakiye_has": float(t_row[4]), "bakiye_tl": float(t_row[5])
+            "bakiye_has": float(t_row[4]), "bakiye_tl": float(t_row[5]), "bakiye_usd": float(t_row[6]), "bakiye_eur": float(t_row[7])
         }
 
         # Sonra işlemlerini çek
         cursor.execute("""
-            SELECT id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama, islem_tarihi
+            SELECT id, islem_tipi, islem_detayi, has_altin, tl_tutar, usd_tutar, eur_tutar, aciklama, islem_tarihi
             FROM toptanci_islemler
             WHERE toptanci_id = %s
             ORDER BY islem_tarihi DESC
@@ -2111,8 +2282,12 @@ def toptanci_islemleri_getir(toptanci_id: int):
         for r in cursor.fetchall():
             islemler.append({
                 "id": r[0], "islem_tipi": r[1], "islem_detayi": r[2],
-                "has_altin": float(r[3]), "tl_tutar": float(r[4]),
-                "aciklama": r[5], "islem_tarihi": r[6]
+                "has_altin": float(r[3]),
+                "tl_tutar": float(r[4]),
+                "usd_tutar": float(r[5]) if r[5] else 0.0,
+                "eur_tutar": float(r[6]) if r[6] else 0.0,
+                "aciklama": r[7],
+                "islem_tarihi": r[8]
             })
             
         return {"toptanci": toptanci, "islemler": islemler}
@@ -2129,23 +2304,21 @@ def toptanci_islem_ekle(toptanci_id: int, payload: ToptanciIslemPayload):
         conn = psycopg2.connect(**DB_CONFIG)
         cursor = conn.cursor()
         
-        # Eğer Borçlanma (Mal Alış) ise borç (+) yazılır (Kuyumcunun borcu artar)
-        # Ödeme ise borç (-) yazılır (Kuyumcunun borcu azalır)
-        # Frontend direk + veya - gönderecek şekilde tasarlanabilir ama biz burada
-        # backend tarafında güvenliği sağlamak için işaretleri belirleyebiliriz.
-        # Basitlik için frontend'den her zaman mutlak değer (pozitif) geldiğini varsayalım.
-        
         has_val = abs(payload.has_altin)
         tl_val = abs(payload.tl_tutar)
+        usd_val = abs(payload.usd_tutar)
+        eur_val = abs(payload.eur_tutar)
         
         if payload.islem_tipi == "Ödeme":
             has_val = -has_val
             tl_val = -tl_val
+            usd_val = -usd_val
+            eur_val = -eur_val
             
         cursor.execute("""
-            INSERT INTO toptanci_islemler (toptanci_id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
-        """, (toptanci_id, payload.islem_tipi, payload.islem_detayi, has_val, tl_val, payload.aciklama))
+            INSERT INTO toptanci_islemler (toptanci_id, islem_tipi, islem_detayi, has_altin, tl_tutar, usd_tutar, eur_tutar, aciklama)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (toptanci_id, payload.islem_tipi, payload.islem_detayi, has_val, tl_val, usd_val, eur_val, payload.aciklama))
         
         new_id = cursor.fetchone()[0]
         conn.commit()
@@ -2167,14 +2340,18 @@ def toptanci_coklu_islem_ekle(toptanci_id: int, payload: ToptanciCokluIslemPaylo
         for kalem in payload.kalemler:
             has_val = abs(kalem.has_altin)
             tl_val = abs(kalem.tl_tutar)
+            usd_val = abs(getattr(kalem, 'usd_tutar', 0.0))
+            eur_val = abs(getattr(kalem, 'eur_tutar', 0.0))
             if kalem.islem_tipi == "Ödeme":
                 has_val = -has_val
                 tl_val = -tl_val
+                usd_val = -usd_val
+                eur_val = -eur_val
                 
             cursor.execute("""
-                INSERT INTO toptanci_islemler (toptanci_id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (toptanci_id, kalem.islem_tipi, kalem.islem_detayi, has_val, tl_val, payload.aciklama))
+                INSERT INTO toptanci_islemler (toptanci_id, islem_tipi, islem_detayi, has_altin, tl_tutar, usd_tutar, eur_tutar, aciklama)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (toptanci_id, kalem.islem_tipi, kalem.islem_detayi, has_val, tl_val, usd_val, eur_val, payload.aciklama))
             
         conn.commit()
         return {"mesaj": f"{len(payload.kalemler)} adet işlem kaydedildi."}
@@ -2216,10 +2393,12 @@ def generate_toptanci_pdf_report(
         # 1. Toptancı bilgilerini ve güncel bakiyesini çek
         cursor.execute("""
             SELECT id, unvan, telefon, aciklama,
-                   (SELECT COALESCE(SUM(has_altin),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_has,
-                   (SELECT COALESCE(SUM(tl_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_tl
+                 (SELECT COALESCE(SUM(has_altin),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_has,
+                 (SELECT COALESCE(SUM(tl_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_tl,
+                 (SELECT COALESCE(SUM(usd_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_usd,
+                 (SELECT COALESCE(SUM(eur_tutar),0) FROM toptanci_islemler WHERE toptanci_id = %s) as b_eur
             FROM toptancilar WHERE id = %s
-        """, (toptanci_id, toptanci_id, toptanci_id))
+        """, (toptanci_id, toptanci_id, toptanci_id, toptanci_id, toptanci_id))
         t_row = cursor.fetchone()
         if not t_row:
             raise HTTPException(status_code=404, detail="Toptancı bulunamadı")
@@ -2229,10 +2408,12 @@ def generate_toptanci_pdf_report(
         aciklama_genel = t_row[3] or "Açıklama yok"
         bakiye_has = float(t_row[4])
         bakiye_tl = float(t_row[5])
+        bakiye_usd = float(t_row[6])
+        bakiye_eur = float(t_row[7])
         
         # 2. İşlemleri filtreyle çek
         query = """
-            SELECT id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama, islem_tarihi
+            SELECT id, islem_tipi, islem_detayi, has_altin, tl_tutar, usd_tutar, eur_tutar, aciklama, islem_tarihi
             FROM toptanci_islemler
             WHERE toptanci_id = %s
         """
@@ -2269,6 +2450,8 @@ def generate_toptanci_pdf_report(
         # Dönem toplamları
         period_has = sum(float(r[3] or 0) for r in rows)
         period_tl = sum(float(r[4] or 0) for r in rows)
+        period_usd = sum(float(r[5] or 0) for r in rows)
+        period_eur = sum(float(r[6] or 0) for r in rows)
         
         # PDF oluşturma
         pdf = CorporatePDF()
@@ -2315,16 +2498,39 @@ def generate_toptanci_pdf_report(
         pdf.ln(4)
         
         # --- ÖZET KARTLARI (KPI) ---
-        pdf.set_font("Corporate", "", 9)
-        
-        # Kart 1: Dönem Değişimi (Filtreli dönem toplamı)
-        pdf.set_draw_color(191, 219, 254)
-        pdf.set_fill_color(239, 246, 255)
-        pdf.set_text_color(30, 64, 175)
-        
+        # Metinleri hazırla
         has_period_str = f"{period_has:+.3f} gr Has".replace("+", "+ ") if period_has >= 0 else f"{period_has:.3f} gr Has"
         tl_period_str = f"{period_tl:+,.2f} TL".replace(",", ".").replace("+", "+ ") if period_tl >= 0 else f"{period_tl:,.2f} TL".replace(",", ".")
         period_metin = f"Dönem Has: {has_period_str}  |  Dönem TL: {tl_period_str}"
+        if period_usd != 0:
+            usd_period_str = f"{period_usd:+.2f} USD".replace("+", "+ ") if period_usd >= 0 else f"{period_usd:.2f} USD"
+            period_metin += f"  |  Dönem USD: {usd_period_str}"
+        if period_eur != 0:
+            eur_period_str = f"{period_eur:+.2f} EUR".replace("+", "+ ") if period_eur >= 0 else f"{period_eur:.2f} EUR"
+            period_metin += f"  |  Dönem EUR: {eur_period_str}"
+            
+        bakiye_has_str = f"{bakiye_has:+.3f} gr Has".replace("+", "+ ") if bakiye_has >= 0 else f"{bakiye_has:.3f} gr Has"
+        bakiye_tl_str = f"{bakiye_tl:+,.2f} TL".replace(",", ".").replace("+", "+ ") if bakiye_tl >= 0 else f"{bakiye_tl:,.2f} TL".replace(",", ".")
+        bakiye_metin = f"Güncel Has: {bakiye_has_str}  |  Güncel TL: {bakiye_tl_str}"
+        if bakiye_usd != 0:
+            bakiye_usd_str = f"{bakiye_usd:+.2f} USD".replace("+", "+ ") if bakiye_usd >= 0 else f"{bakiye_usd:.2f} USD"
+            bakiye_metin += f"  |  Güncel USD: {bakiye_usd_str}"
+        if bakiye_eur != 0:
+            bakiye_eur_str = f"{bakiye_eur:+.2f} EUR".replace("+", "+ ") if bakiye_eur >= 0 else f"{bakiye_eur:.2f} EUR"
+            bakiye_metin += f"  |  Güncel EUR: {bakiye_eur_str}"
+
+        # Dinamik font boyutu ayarla (metin uzunsa küçült)
+        if len(period_metin) > 85 or len(bakiye_metin) > 85:
+            pdf.set_font("Corporate", "", 7)
+        elif len(period_metin) > 60 or len(bakiye_metin) > 60:
+            pdf.set_font("Corporate", "", 8)
+        else:
+            pdf.set_font("Corporate", "", 9)
+
+        # Kart 1: Dönem Değişimi
+        pdf.set_draw_color(191, 219, 254)
+        pdf.set_fill_color(239, 246, 255)
+        pdf.set_text_color(30, 64, 175)
         pdf.cell(92, 10, period_metin, border=1, fill=True, align="C")
         
         pdf.cell(6, 10, "", border=0) # İki kutu arası yatay boşluk
@@ -2333,15 +2539,11 @@ def generate_toptanci_pdf_report(
         pdf.set_draw_color(212, 175, 55)
         pdf.set_fill_color(253, 250, 237)
         pdf.set_text_color(180, 130, 20)
-        
-        bakiye_has_str = f"{bakiye_has:+.3f} gr Has".replace("+", "+ ") if bakiye_has >= 0 else f"{bakiye_has:.3f} gr Has"
-        bakiye_tl_str = f"{bakiye_tl:+,.2f} TL".replace(",", ".").replace("+", "+ ") if bakiye_tl >= 0 else f"{bakiye_tl:,.2f} TL".replace(",", ".")
-        bakiye_metin = f"Güncel Has: {bakiye_has_str}  |  Güncel TL: {bakiye_tl_str}"
         pdf.cell(92, 10, bakiye_metin, border=1, fill=True, ln=1, align="C")
         pdf.ln(6)
         
         # --- TABLO BAŞLIKLARI ---
-        headers = ["Tarih", "İşlem", "Detay", "Has Altın (gr)", "TL Tutar", "Açıklama"]
+        headers = ["Tarih", "İşlem", "Detay", "Has Altın (gr)", "Tutar", "Açıklama"]
         widths  = [32, 20, 35, 25, 28, 50]
         
         pdf.set_fill_color(241, 245, 249) # Tablo başlık arkaplanı
@@ -2359,13 +2561,15 @@ def generate_toptanci_pdf_report(
         
         fill = False
         for r in rows:
-            # r: [id, islem_tipi, islem_detayi, has_altin, tl_tutar, aciklama, islem_tarihi]
-            t_str = r[6].strftime("%d.%m.%Y %H:%M") if r[6] else "-"
+            # r: [id, islem_tipi, islem_detayi, has_altin, tl_tutar, usd_tutar, eur_tutar, aciklama, islem_tarihi]
+            t_str = r[8].strftime("%d.%m.%Y %H:%M") if r[8] else "-"
             tip = str(r[1])
             detay = str(r[2] or "-")
             has_val = float(r[3] or 0)
             tl_val = float(r[4] or 0)
-            aciklama = str(r[5] or "-")
+            usd_val = float(r[5] or 0)
+            eur_val = float(r[6] or 0)
+            aciklama = str(r[7] or "-")
             
             # Değerleri formatla
             if has_val != 0:
@@ -2375,6 +2579,10 @@ def generate_toptanci_pdf_report(
                 
             if tl_val != 0:
                 tl_str = f"{tl_val:+,.2f} TL".replace("+", "+ ").replace(",", "X").replace(".", ",").replace("X", ".") if tl_val >= 0 else f"{tl_val:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
+            elif usd_val != 0:
+                tl_str = f"{usd_val:+,.2f} USD".replace("+", "+ ").replace(",", "X").replace(".", ",").replace("X", ".") if usd_val >= 0 else f"{usd_val:,.2f} USD".replace(",", "X").replace(".", ",").replace("X", ".")
+            elif eur_val != 0:
+                tl_str = f"{eur_val:+,.2f} EUR".replace("+", "+ ").replace(",", "X").replace(".", ",").replace("X", ".") if eur_val >= 0 else f"{eur_val:,.2f} EUR".replace(",", "X").replace(".", ",").replace("X", ".")
             else:
                 tl_str = "-"
                 
@@ -2410,6 +2618,236 @@ def generate_toptanci_pdf_report(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF oluşturulamadı: {e}")
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ─────────────────────────────────────────────
+# ÜRÜN STOK YÖNETİMİ
+# ─────────────────────────────────────────────
+
+@app.get("/urun_stok")
+def urun_stok_getir(urun_id: Optional[int] = None, sadece_satilmamis: bool = False):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        query = "SELECT id, urun_id, kod, ozellikler, maliyet_usd, satis_fiyati, satildi_mi, eklenme_tarihi, para_birimi FROM urun_stok WHERE 1=1"
+        params = []
+        if sadece_satilmamis:
+            query += " AND satildi_mi = FALSE"
+        if urun_id is not None:
+            query += " AND urun_id = %s"
+            params.append(urun_id)
+            
+        query += " ORDER BY eklenme_tarihi DESC"
+        cursor.execute(query, tuple(params))
+        
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": r[0], "urun_id": r[1], "kod": r[2], "ozellikler": r[3],
+                "maliyet_usd": float(r[4]), "satis_fiyati": float(r[5]),
+                "satildi_mi": bool(r[6]), "eklenme_tarihi": r[7].isoformat() if r[7] else None,
+                "para_birimi": r[8] or "USD" # 👈 BURA EKLENDİ
+            } for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.post("/urun_stok", status_code=201)
+async def urun_stok_ekle(model: UrunStokModel):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO urun_stok (urun_id, kod, ozellikler, maliyet_usd, satis_fiyati, para_birimi)
+        VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+    """, (model.urun_id, model.kod, model.ozellikler, model.maliyet_usd, model.satis_fiyati, model.para_birimi))
+        stok_id = cursor.fetchone()[0]
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_URUN_STOK"}))
+        return {"id": stok_id, "mesaj": "Stok başarıyla eklendi."}
+    except psycopg2.IntegrityError:
+        if conn: conn.rollback()
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.put("/urun_stok/{stok_id}")
+async def urun_stok_guncelle(stok_id: int, payload: UrunStokGuncellePayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        alanlar = []
+        degerler = []
+        if payload.kod is not None:
+            alanlar.append("kod = %s")
+            degerler.append(payload.kod.strip())
+        if payload.ozellikler is not None:
+            alanlar.append("ozellikler = %s")
+            degerler.append(payload.ozellikler)
+        if payload.maliyet_usd is not None:
+            alanlar.append("maliyet_usd = %s")
+            degerler.append(payload.maliyet_usd)
+        if payload.satis_fiyati is not None:
+            alanlar.append("satis_fiyati = %s")
+            degerler.append(payload.satis_fiyati)
+        if payload.satildi_mi is not None:
+            alanlar.append("satildi_mi = %s")
+            degerler.append(payload.satildi_mi)
+            
+        if not alanlar:
+            raise HTTPException(status_code=400, detail="Güncellenecek alan bulunamadı.")
+            
+        degerler.append(stok_id)
+        cursor.execute(f"UPDATE urun_stok SET {', '.join(alanlar)} WHERE id = %s RETURNING id", tuple(degerler))
+        updated = cursor.fetchone()
+        if not updated:
+            raise HTTPException(status_code=404, detail="Stok bulunamadı.")
+        
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_URUN_STOK"}))
+        return {"mesaj": "Başarıyla güncellendi."}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.delete("/urun_stok/{stok_id}")
+async def urun_stok_sil(stok_id: int):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM urun_stok WHERE id = %s RETURNING id", (stok_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Stok bulunamadı.")
+        conn.commit()
+        await manager.broadcast_text(json.dumps({"type": "REFRESH_URUN_STOK"}))
+        return {"mesaj": "Silindi"}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ─────────────────────────────────────────────
+# MÜŞTERİ EMANET VE NOT APİ
+# ─────────────────────────────────────────────
+
+class MusteriEmanetPayload(BaseModel):
+    musteri_adi: str
+    telefon: Optional[str] = None
+    not_detayi: str
+    teslim_edildi_mi: bool = False
+    kategori: Optional[str] = 'Genel'
+
+@app.get("/musteri_emanetler")
+def musteri_emanetleri_getir():
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, musteri_adi, telefon, not_detayi, teslim_edildi_mi, teslim_tarihi, olusturulma_tarihi, kategori
+            FROM musteri_emanetler
+            ORDER BY olusturulma_tarihi DESC
+        """)
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": r[0],
+                "musteri_adi": r[1],
+                "telefon": r[2],
+                "not_detayi": r[3],
+                "teslim_edildi_mi": r[4],
+                "teslim_tarihi": r[5].isoformat() if r[5] else None,
+                "olusturulma_tarihi": r[6].isoformat() if r[6] else None,
+                "kategori": r[7] if len(r) > 7 else 'Genel'
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.post("/musteri_emanetler")
+def musteri_emaneti_ekle(payload: MusteriEmanetPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO musteri_emanetler (musteri_adi, telefon, not_detayi, teslim_edildi_mi, teslim_tarihi, kategori)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+        """, (
+            payload.musteri_adi,
+            payload.telefon,
+            payload.not_detayi,
+            payload.teslim_edildi_mi,
+            datetime.now() if payload.teslim_edildi_mi else None,
+            payload.kategori
+        ))
+        new_id = cursor.fetchone()[0]
+        conn.commit()
+        return {"mesaj": "Müşteri emanet/not kaydı eklendi", "id": new_id}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.put("/musteri_emanetler/{id}")
+def musteri_emaneti_guncelle(id: int, payload: MusteriEmanetPayload):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        
+        teslim_tarihi = datetime.now() if payload.teslim_edildi_mi else None
+        
+        cursor.execute("""
+            UPDATE musteri_emanetler
+            SET musteri_adi = %s, telefon = %s, not_detayi = %s, teslim_edildi_mi = %s, teslim_tarihi = %s, kategori = %s
+            WHERE id = %s
+        """, (payload.musteri_adi, payload.telefon, payload.not_detayi, payload.teslim_edildi_mi, teslim_tarihi, payload.kategori, id))
+        
+        conn.commit()
+        return {"mesaj": "Kayıt güncellendi"}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+@app.delete("/musteri_emanetler/{id}")
+def musteri_emaneti_sil(id: int):
+    conn = cursor = None
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM musteri_emanetler WHERE id = %s", (id,))
+        conn.commit()
+        return {"mesaj": "Kayıt silindi"}
+    except Exception as e:
+        if conn: conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         if cursor: cursor.close()
         if conn: conn.close()

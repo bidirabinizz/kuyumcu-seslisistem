@@ -53,7 +53,9 @@ class _KasaScreenState extends State<KasaScreen> {
   List<Personel> _personeller = [];
   List<Urun>     _urunler     = [];
   List<Kategori> _kategoriler = [];
-  Map<String, dynamic>? _kurlar;
+  Map<String, dynamic> _kurlar = {};
+  List<Map<String, dynamic>> _urunStoklar = [];
+
   bool _personelYukleniyor  = true;
   bool _urunYukleniyor      = true;
   bool _kategoriYukleniyor  = true;
@@ -64,16 +66,43 @@ class _KasaScreenState extends State<KasaScreen> {
 
   void _updateGroupedUrunler() {
     final Map<String, Map<String, List<Urun>>> g = {};
-    for (final u in _urunler) {
+
+    // Ürünleri sira'ya göre sıralayarak grupla
+    final sortedUrunler = List<Urun>.from(_urunler)
+      ..sort((a, b) => a.sira != b.sira ? a.sira.compareTo(b.sira) : a.id.compareTo(b.id));
+
+    for (final u in sortedUrunler) {
+      if (u.favori) continue; // Favori olanları ana kategorisinden gizle
       g.putIfAbsent(u.urunKategorisi, () => {});
       g[u.urunKategorisi]!.putIfAbsent(u.urunGrubu, () => []).add(u);
     }
+
+    // Favori ürünler de sira sırasına göre
+    final favorilerList = sortedUrunler.where((u) => u.favori).toList();
+    if (favorilerList.isNotEmpty) {
+      g['FAVORILER'] = {
+        'Favori Ürünler': favorilerList,
+      };
+    }
+
     _groupedUrunler = g;
 
+    // Kategorileri backend'deki sira sırasına göre listele
+    // (backend zaten ORDER BY sira ile döndürüyor, listedeki sıra korunur)
+    // Sadece içinde en az bir ürün olan aktif kategorileri göster
     final dbKatCodes = _kategoriler.where((k) => k.aktif).map((k) => k.ad.toUpperCase()).toSet();
+
     _orderedKats = [
-      ..._kategoriler.where((k) => k.aktif).map((k) => _KatDisplayInfo(ad: k.ad.toUpperCase(), etiket: k.etiket)),
-      ...g.keys.where((k) => !dbKatCodes.contains(k.toUpperCase())).map((k) => _KatDisplayInfo(ad: k, etiket: '📁 $k')),
+      if (favorilerList.isNotEmpty)
+        _KatDisplayInfo(ad: 'FAVORILER', etiket: '⭐ Favoriler'),
+      // Kategorileri _kategoriler listesinin sırasına göre al; içi boş olanları atla
+      ..._kategoriler
+          .where((k) => k.aktif && g.containsKey(k.ad.toUpperCase()))
+          .map((k) => _KatDisplayInfo(ad: k.ad.toUpperCase(), etiket: k.etiket)),
+      // DB'de tanımlı olmayan, ürünlerin kendi kategorisi olan gruplar
+      ...g.keys
+          .where((k) => k != 'FAVORILER' && !dbKatCodes.contains(k.toUpperCase()))
+          .map((k) => _KatDisplayInfo(ad: k, etiket: '📁 $k')),
     ];
   }
 
@@ -88,6 +117,7 @@ class _KasaScreenState extends State<KasaScreen> {
     _urunleriYukle();
     _kategorileriYukle();
     _kurlariYukle();
+    _urunStokYukle();
     _baglantiyiBaslat();
   }
 
@@ -128,6 +158,9 @@ class _KasaScreenState extends State<KasaScreen> {
               } else if (type == 'REFRESH_KURLAR') {
                 debugPrint('[WS] Günlük kurlar canlı güncelleniyor...');
                 _kurlariYukle();
+              } else if (type == 'REFRESH_URUN_STOK') {
+                debugPrint('[WS] Ürün stokları canlı güncelleniyor...');
+                _urunStokYukle();
               }
             }
           } catch (e) {
@@ -240,6 +273,20 @@ class _KasaScreenState extends State<KasaScreen> {
     }
   }
 
+  Future<void> _urunStokYukle() async {
+    try {
+      final res = await http
+          .get(Uri.parse('${AppConfig.apiBase}/urun_stok?sadece_satilmamis=true'))
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200) {
+        final liste = List<Map<String, dynamic>>.from(json.decode(res.body));
+        if (mounted) setState(() => _urunStoklar = liste);
+      }
+    } catch (e) {
+      debugPrint('[KasaScreen] Stok listesi yüklenemedi: $e');
+    }
+  }
+
   void _sifirla() {
     setState(() {
       _adim            = 1;
@@ -250,8 +297,13 @@ class _KasaScreenState extends State<KasaScreen> {
       _miktar          = '';
       _fiyat           = '';
       _aktifInput      = 'miktar';
+      _seciliUrunStokId = null;
+      _seciliStokKodu   = null;
     });
   }
+
+  int? _seciliUrunStokId;
+  String? _seciliStokKodu;
 
   void _numpadTus(String tus) {
     setState(() {
@@ -321,16 +373,54 @@ class _KasaScreenState extends State<KasaScreen> {
                         aktifInput: _aktifInput,
                         initials: _initials,
                         onGeri: () => setState(() => _adim = 1),
-                        onUrunSec: (u) => setState(() {
-                          _secilenUrun = u;
-                          _miktar = '';
-                        }),
+                        onUrunSec: (u) async {
+                          if (u.stokTakibi && _islemTipi == 'SATIS') {
+                            final stokListe = _urunStoklar.where((s) => s['urun_id'] == u.id).toList();
+                            final secim = await showDialog<Map<String, dynamic>>(
+                              context: context,
+                              barrierDismissible: true,
+                              builder: (ctx) => _StokSecimDialog(stoklar: stokListe, urunAdi: u.ad),
+                            );
+                            if (secim != null) {
+                              setState(() {
+                                _secilenUrun = u;
+                                _miktar = '';
+                                _seciliUrunStokId = secim['id'];
+                                _seciliStokKodu = secim['kod'] ?? secim['barkod'] ?? secim['sertifika_no'] ?? 'Stok #${secim['id']}';
+                              });
+                            }
+                          } else {
+                            setState(() {
+                              _secilenUrun = u;
+                              _miktar = '';
+                              _seciliUrunStokId = null;
+                              _seciliStokKodu = null;
+                            });
+                          }
+                        },
                         onIslemTipi: (t) => setState(() => _islemTipi = t),
                         onOdemeTipi: (t) => setState(() => _odemeTipi = t),
                         onInputSec: (i) => setState(() => _aktifInput = i),
                         onNumpad: _numpadTus,
                         onDevam: () => setState(() => _adim = 3),
                         kurlar: _kurlar,
+                        seciliStokKodu: _seciliStokKodu,
+                        onStokDegistir: () async {
+                          if (_secilenUrun != null && _secilenUrun!.stokTakibi && _islemTipi == 'SATIS') {
+                            final stokListe = _urunStoklar.where((s) => s['urun_id'] == _secilenUrun!.id).toList();
+                            final secim = await showDialog<Map<String, dynamic>>(
+                              context: context,
+                              barrierDismissible: true,
+                              builder: (ctx) => _StokSecimDialog(stoklar: stokListe, urunAdi: _secilenUrun!.ad),
+                            );
+                            if (secim != null) {
+                              setState(() {
+                                _seciliUrunStokId = secim['id'];
+                                _seciliStokKodu = secim['kod'] ?? secim['barkod'] ?? secim['sertifika_no'] ?? 'Stok #${secim['id']}';
+                              });
+                            }
+                          }
+                        },
                       ),
                     3 => _IslemOnayla(
                         key: const ValueKey(3),
@@ -344,6 +434,7 @@ class _KasaScreenState extends State<KasaScreen> {
                         onGeri: () => setState(() => _adim = 2),
                         onTamamlandi: _sifirla,
                         kurlar: _kurlar,
+                        seciliUrunStokId: _seciliUrunStokId,
                       ),
                     _ => const SizedBox.shrink(),
                   },
@@ -620,6 +711,8 @@ class _IslemGir extends StatelessWidget {
   final void Function(String) onNumpad;
   final VoidCallback onDevam;
   final Map<String, dynamic>? kurlar;
+  final String? seciliStokKodu;
+  final VoidCallback? onStokDegistir;
 
   const _IslemGir({
     super.key,
@@ -643,9 +736,17 @@ class _IslemGir extends StatelessWidget {
     required this.onNumpad,
     required this.onDevam,
     this.kurlar,
+    this.seciliStokKodu,
+    this.onStokDegistir,
   });
 
-  bool get _devamAktif => miktar.isNotEmpty && (double.tryParse(miktar) ?? 0) > 0 && secilenUrun != null;
+  bool get _devamAktif {
+    if (secilenUrun == null) return false;
+    if (secilenUrun!.stokTakibi && islemTipi == 'SATIS') {
+      return seciliStokKodu != null && fiyat.isNotEmpty && (double.tryParse(fiyat) ?? 0) > 0;
+    }
+    return miktar.isNotEmpty && (double.tryParse(miktar) ?? 0) > 0;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -747,31 +848,19 @@ class _IslemGir extends StatelessWidget {
                                           ),
                                         ),
                                       ),
-                                      for (final grup in gruplar[kat.ad]!.keys) ...[
-                                        // Ürün Grubu Başlığı (Örn: Bilezik, Yüzük, Kolye)
-                                        Padding(
-                                          padding: const EdgeInsets.only(top: 6, bottom: 4, left: 6),
-                                          child: Text(
-                                            grup.toUpperCase(),
-                                            style: const TextStyle(
-                                              color: Color(0xFF6B7280),
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 6.0, bottom: 8.0),
+                                        child: Wrap(
+                                          spacing: 8,
+                                          runSpacing: 8,
+                                          children: gruplar[kat.ad]!.values
+                                              .expand((list) => list)
+                                              .map((u) {
+                                            final aktif = secilenUrun?.id == u.id;
+                                            return _UrunBtn(urun: u, aktif: aktif, onTap: () => onUrunSec(u));
+                                          }).toList(),
                                         ),
-                                        Padding(
-                                          padding: const EdgeInsets.only(left: 6.0, bottom: 8.0),
-                                          child: Wrap(
-                                            spacing: 8,
-                                            runSpacing: 8,
-                                            children: gruplar[kat.ad]![grup]!.map((u) {
-                                              final aktif = secilenUrun?.id == u.id;
-                                              return _UrunBtn(urun: u, aktif: aktif, onTap: () => onUrunSec(u));
-                                            }).toList(),
-                                          ),
-                                        ),
-                                      ],
+                                      ),
                                     ],
                                 ],
                               ),
@@ -814,10 +903,21 @@ class _IslemGir extends StatelessWidget {
                       Row(
                         children: [
                           _InputGosterge(
-                            label: secilenUrun?.islemBirimi == 'ADET' ? 'Adet' : 'Gram',
-                            deger: miktar,
+                            label: secilenUrun?.stokTakibi == true && islemTipi == 'SATIS'
+                                ? 'Stok Kodu'
+                                : ((secilenUrun?.islemBirimi == 'ADET' || secilenUrun?.stokTakibi == true) ? 'Adet' : 'Gram'),
+                            deger: secilenUrun?.stokTakibi == true && islemTipi == 'SATIS'
+                                ? (seciliStokKodu ?? 'Seçiniz')
+                                : miktar,
                             aktif: aktifInput == 'miktar',
-                            onTap: () => onInputSec('miktar'),
+                            onTap: () {
+                              if (secilenUrun?.stokTakibi == true && islemTipi == 'SATIS' && onStokDegistir != null) {
+                                onStokDegistir!();
+                              } else {
+                                onInputSec('miktar');
+                              }
+                            },
+                            formatla: !(secilenUrun?.stokTakibi == true && islemTipi == 'SATIS'),
                           ),
                           const SizedBox(width: 6),
                           _InputGosterge(
@@ -917,6 +1017,7 @@ class _IslemOnayla extends StatefulWidget {
   final VoidCallback onGeri;
   final VoidCallback onTamamlandi;
   final Map<String, dynamic>? kurlar;
+  final int? seciliUrunStokId;
 
   const _IslemOnayla({
     super.key,
@@ -930,6 +1031,7 @@ class _IslemOnayla extends StatefulWidget {
     required this.onGeri,
     required this.onTamamlandi,
     this.kurlar,
+    this.seciliUrunStokId,
   });
 
   @override
@@ -943,8 +1045,9 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
 
   String? get _hasGoster {
     final u = widget.urun;
-    if (u.milyem > 0) {
-      return '≈ ${(widget.miktar * u.milyem).toStringAsFixed(4)} gr has';
+    final etkinMillyem = u.milyemForIslem(widget.islemTipi);
+    if (etkinMillyem > 0) {
+      return '≈ ${(widget.miktar * etkinMillyem).toStringAsFixed(4)} gr has';
     } else if (u.hasKarsiligi > 0) {
       return '≈ ${(widget.miktar * u.hasKarsiligi).toStringAsFixed(4)} gr has';
     }
@@ -955,6 +1058,7 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
     setState(() { _yukleniyor = true; _hata = null; });
     try {
       final u = widget.urun;
+      final etkinMillyem = u.milyemForIslem(widget.islemTipi);
       final isDoviz = u.urunKategorisi == 'DÖVİZ' || u.urunKategorisi == 'DOVIZ';
       double dovizTutar = 0.0;
       double dovizKuru = 1.0;
@@ -974,15 +1078,18 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
 
       final payload = {
         'personel_id':            widget.personel.id,
+        'urun_id':                u.id,
+        'urun_stok_id':           widget.seciliUrunStokId,
         'islem_tipi':             widget.islemTipi,
         'urun_cinsi':             u.urunCinsi,
         'urun_kategorisi':        u.urunKategorisi,
         'islem_birimi':           u.islemBirimi,
-        'brut_miktar':            widget.miktar,
+        'brut_miktar':            (u.stokTakibi && widget.islemTipi == 'SATIS') ? 1.0 : widget.miktar,
         'birim_fiyat':            widget.fiyat,
         'odeme_tipi':             widget.odemeTipi,
-        'adet':                   u.islemBirimi == 'ADET' ? widget.miktar.round() : 1,
-        if (u.milyem > 0)        'milyem_override':        u.milyem,
+        'adet':                   (u.stokTakibi && widget.islemTipi == 'SATIS') ? 1 : ((u.islemBirimi == 'ADET') ? widget.miktar.round() : 1),
+        // İşlem tipine göre doğru milyemi gönder
+        if (etkinMillyem > 0)        'milyem_override':        etkinMillyem,
         if (u.hasKarsiligi > 0)  'has_karsiligi_override': u.hasKarsiligi,
         'urun_adi':               u.ad,
         'doviz_tutar':            double.parse(dovizTutar.toStringAsFixed(2)),
@@ -1145,8 +1252,8 @@ class _IslemOnaylaState extends State<_IslemOnayla> {
                           renkRgb: _renkten(widget.urun.renk),
                         ),
                         _OzetKart(
-                          baslik: widget.urun.islemBirimi == 'ADET' ? 'Adet' : 'Miktar',
-                          deger: widget.urun.islemBirimi == 'ADET'
+                          baslik: (widget.urun.islemBirimi == 'ADET' || widget.urun.stokTakibi) ? 'Adet' : 'Miktar',
+                          deger: (widget.urun.islemBirimi == 'ADET' || widget.urun.stokTakibi)
                               ? '${widget.miktar.round()} adet'
                               : '${widget.miktar} gr',
                         ),
@@ -1394,7 +1501,8 @@ class _UrunBtn extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        // ÜRÜN BUTONU (KODU) YÜKSEKLİĞİNİ BURADAKİ vertical DEĞERİNİ (Örn: 15 veya 20 yaparak) DEĞİŞTİREBİLİRSİNİZ:
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 15),
         decoration: BoxDecoration(
           color: aktif ? c : c.withOpacity(0.12),
           borderRadius: BorderRadius.circular(0),
@@ -1412,22 +1520,6 @@ class _UrunBtn extends StatelessWidget {
                 fontSize: 12,
               ),
             ),
-            if (urun.milyem > 0)
-              Text(
-                '%${(urun.milyem * 100).toStringAsFixed(1)} has',
-                style: TextStyle(
-                  color: (aktif ? const Color(0xFF1A1A1A) : c).withOpacity(0.65),
-                  fontSize: 9,
-                ),
-              ),
-            if (urun.hasKarsiligi > 0)
-              Text(
-                '${urun.hasKarsiligi.toStringAsFixed(4)} gr/adet',
-                style: TextStyle(
-                  color: (aktif ? const Color(0xFF1A1A1A) : c).withOpacity(0.65),
-                  fontSize: 9,
-                ),
-              ),
           ],
         ),
       ),
@@ -1440,7 +1532,28 @@ class _InputGosterge extends StatelessWidget {
   final String deger;
   final bool aktif;
   final VoidCallback onTap;
-  const _InputGosterge({required this.label, required this.deger, required this.aktif, required this.onTap});
+  final bool formatla;
+
+  const _InputGosterge({
+    required this.label,
+    required this.deger,
+    required this.aktif,
+    required this.onTap,
+    this.formatla = true,
+  });
+
+  String _formatla(String val) {
+    if (val.isEmpty) return '0';
+    final parts = val.split('.');
+    String intPart = parts[0];
+    if (intPart.isEmpty) intPart = '0';
+    final reg = RegExp(r'\B(?=(\d{3})+(?!\d))');
+    intPart = intPart.replaceAll(reg, '.');
+    if (parts.length > 1) {
+      return '$intPart,${parts[1]}';
+    }
+    return intPart;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1470,10 +1583,12 @@ class _InputGosterge extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      deger.isEmpty ? '0' : deger,
+                      formatla ? _formatla(deger) : (deger.isEmpty ? 'Seçiniz' : deger),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                       style: TextStyle(
-                        color: deger.isEmpty ? const Color(0xFF9CA3AF) : const Color(0xFF1A1A1A),
-                        fontSize: 20,
+                        color: (deger.isEmpty || deger == 'Seçiniz') ? const Color(0xFF9CA3AF) : const Color(0xFF1A1A1A),
+                        fontSize: 16,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -1561,10 +1676,44 @@ class _OzetKart extends StatelessWidget {
 }
 
 // ─── NumPad Widget ────────────────────────────────────────────────────────────
-class _NumPad extends StatelessWidget {
+class _NumPad extends StatefulWidget {
   final void Function(String) onTus;
   final bool ondalikAktif;
   const _NumPad({required this.onTus, this.ondalikAktif = true});
+
+  @override
+  State<_NumPad> createState() => _NumPadState();
+}
+
+class _NumPadState extends State<_NumPad> {
+  Timer? _deleteTimer;
+  int _deleteDelay = 300;
+
+  void _startDelete() {
+    widget.onTus('DEL');
+    _deleteDelay = 300;
+    _deleteTimer = Timer.periodic(Duration(milliseconds: _deleteDelay), _deleteTick);
+  }
+
+  void _deleteTick(Timer timer) {
+    widget.onTus('DEL');
+    if (_deleteDelay > 50) {
+      _deleteDelay = (_deleteDelay * 0.7).toInt();
+      _deleteTimer?.cancel();
+      _deleteTimer = Timer.periodic(Duration(milliseconds: _deleteDelay), _deleteTick);
+    }
+  }
+
+  void _stopDelete() {
+    _deleteTimer?.cancel();
+    _deleteTimer = null;
+  }
+
+  @override
+  void dispose() {
+    _stopDelete();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1572,7 +1721,7 @@ class _NumPad extends StatelessWidget {
       ['7', '8', '9'],
       ['4', '5', '6'],
       ['1', '2', '3'],
-      [ondalikAktif ? '.' : '', '0', 'DEL'],
+      [widget.ondalikAktif ? '.' : '', '0', 'DEL'],
     ];
     return Column(
       children: tuslar.map((satir) {
@@ -1587,23 +1736,31 @@ class _NumPad extends StatelessWidget {
                   child: Material(
                     color: isDel ? const Color(0xFFEAEAEA) : Colors.white,
                     borderRadius: BorderRadius.circular(0),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(0),
-                      onTap: () {
+                    child: GestureDetector(
+                      onTapDown: (_) {
                         HapticFeedback.selectionClick();
-                        onTus(tus);
+                        if (isDel) {
+                          _startDelete();
+                        } else {
+                          widget.onTus(tus);
+                        }
                       },
-                      child: Center(
-                        child: isDel
-                            ? const Icon(Icons.backspace_outlined, color: Color(0xFF6B7280), size: 20)
-                            : Text(
-                                tus,
-                                style: const TextStyle(
-                                  color: Color(0xFF1A1A1A),
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w700,
+                      onTapUp: (_) => isDel ? _stopDelete() : null,
+                      onTapCancel: () => isDel ? _stopDelete() : null,
+                      child: Container(
+                        color: Colors.transparent, // to catch taps
+                        child: Center(
+                          child: isDel
+                              ? const Icon(Icons.backspace_outlined, color: Color(0xFF6B7280), size: 20)
+                              : Text(
+                                  tus,
+                                  style: const TextStyle(
+                                    color: Color(0xFF1A1A1A),
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
-                              ),
+                        ),
                       ),
                     ),
                   ),
@@ -1613,6 +1770,208 @@ class _NumPad extends StatelessWidget {
           ),
         );
       }).toList(),
+    );
+  }
+}
+
+// ─── Stok Seçim Dialogu ───────────────────────────────────────────────────────
+class _StokSecimDialog extends StatelessWidget {
+  final List<Map<String, dynamic>> stoklar;
+  final String urunAdi;
+
+  const _StokSecimDialog({required this.stoklar, required this.urunAdi});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      backgroundColor: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        width: 440,
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD4AF37).withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.inventory_2_outlined,
+                    color: Color(0xFFD4AF37),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        urunAdi,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1F2937),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      const Text(
+                        'Lütfen satılacak ürünün stok kodunu seçin',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, color: Color(0xFF9CA3AF)),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // Content
+            if (stoklar.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.layers_clear_outlined,
+                        size: 48,
+                        color: const Color(0xFF9CA3AF).withOpacity(0.5),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Bu ürün için kayıtlı aktif stok bulunamadı.',
+                        style: TextStyle(
+                          color: Color(0xFF6B7280),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Lütfen önce admin panelinden stok girişi yapın.',
+                        style: TextStyle(
+                          color: Color(0xFF9CA3AF),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.5,
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  physics: const BouncingScrollPhysics(),
+                  itemCount: stoklar.length,
+                  separatorBuilder: (c, i) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final s = stoklar[index];
+                    final kod = s['kod'] ?? s['barkod'] ?? s['sertifika_no'] ?? 'Stok #${s['id']}';
+                    final satisFiyati = s['satis_fiyati'] ?? s['fiyat'];
+                    
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF9FAFB),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE5E7EB)),
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () => Navigator.of(context).pop(s),
+                          splashColor: const Color(0xFFD4AF37).withOpacity(0.08),
+                          highlightColor: const Color(0xFFD4AF37).withOpacity(0.04),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.tag,
+                                  color: Color(0xFF9CA3AF),
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    kod,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF1F2937),
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                ),
+                                if (satisFiyati != null)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF10B981).withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Text(
+                                      '${satisFiyati.toString()} ${s['para_birimi'] == 'USD' ? '\$' : s['para_birimi'] == 'EUR' ? '€' : '₺'}',
+                                      style: const TextStyle(
+                                        color: Color(0xFF047857),
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF6B7280).withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: const Text(
+                                      'Fiyat Yok',
+                                      style: TextStyle(
+                                        color: Color(0xFF4B5563),
+                                        fontWeight: FontWeight.w500,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

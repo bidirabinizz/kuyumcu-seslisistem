@@ -1,0 +1,9 @@
+Line 83: ...g.keys.where((k) => k != 'FAVORİLER' && !dbKatCodes.contains(k.toUpperCase())).map((k) => _KatDisplayInfo(ad: k, etiket: 'ğŸ“ $k')),
+Line 86: ? [_KatDisplayInfo(ad: 'FAVORİLER', etiket: 'â­ Favoriler'), ...baseKats]
+Line 751: // ALIÅ / SATIÅ
+Line 757: label: '↓ SATIÅ',
+Line 764: label: '↑ ALIÅ',
+Line 1225: deger: widget.islemTipi == 'SATIS' ? '↓ SATIÅ' : '↑ ALIÅ',
+Line 1283: '${formatTurkishNumber(widget.miktar)} ${widget.urun.urunCinsi} â” ${formatTurkishNumber(widget.fiyat)} ₺ | 1 ${widget.urun.urunCinsi} = ${formatTurkishNumber(widget.fiyat / widget.miktar, decimals: 4)} ₺',
+Line 1398: child: const Text('â† Geri', style: TextStyle(fontWeight: FontWeight.w700)),
+Line 1483: // BUTON YÜKSEKLİÄİNİ BURADAN AYARLAYABİLİRSİNİZ.

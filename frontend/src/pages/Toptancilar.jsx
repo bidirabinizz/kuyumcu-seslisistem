@@ -157,27 +157,53 @@ export const Toptancilar = () => {
                     </div>
                   )}
                   {t.aciklama && (
-                    <p className="text-xs text-ink-400 line-clamp-2">{t.aciklama}</p>
+                    <p className="text-xs text-ink-400 line-clamp-2 mb-4">{t.aciklama}</p>
                   )}
-                </div>
-                
-                {/* Bakiye Özeti */}
-                <div className="p-4 bg-ink-50/50 grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1">
-                      {t.bakiye_has > 0 ? 'BORCUNUZ (HAS)' : t.bakiye_has < 0 ? 'ALACAĞINIZ' : 'HAS BAKİYE'}
-                    </p>
-                    <p className={`font-mono font-black text-base ${t.bakiye_has > 0 ? 'text-red-600' : t.bakiye_has < 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
-                      {Math.abs(t.bakiye_has).toFixed(3)} gr
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1">
-                      {t.bakiye_tl > 0 ? 'BORCUNUZ (TL)' : t.bakiye_tl < 0 ? 'ALACAĞINIZ' : 'TL BAKİYE'}
-                    </p>
-                    <p className={`font-mono font-black text-base ${t.bakiye_tl > 0 ? 'text-red-600' : t.bakiye_tl < 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
-                      {Math.abs(t.bakiye_tl).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
-                    </p>
+                  
+                  {/* Bakiye Özeti */}
+                  <div className="p-4 bg-ink-50/50 grid grid-cols-2 gap-y-3 gap-x-4">
+                    <div>
+                      <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1">
+                        {t.bakiye_has > 0 ? 'BORCUNUZ (HAS)' : t.bakiye_has < 0 ? 'ALACAĞINIZ (HAS)' : 'HAS BAKİYE'}
+                      </p>
+                      <p className={`font-mono font-black text-base ${t.bakiye_has > 0 ? 'text-red-600' : t.bakiye_has < 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
+                        {Math.abs(t.bakiye_has).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} gr
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1">
+                        {t.bakiye_tl > 0 ? 'BORCUNUZ (TL)' : t.bakiye_tl < 0 ? 'ALACAĞINIZ (TL)' : 'TL BAKİYE'}
+                      </p>
+                      <p className={`font-mono font-black text-base ${t.bakiye_tl > 0 ? 'text-red-600' : t.bakiye_tl < 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
+                        {Math.abs(t.bakiye_tl).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                      </p>
+                    </div>
+                    
+                    {/* Sadece bakiyesi olan dövizleri göster veya yer varsa ikisini de göster */}
+                    {(t.bakiye_usd !== 0 || t.bakiye_eur !== 0) && (
+                      <>
+                        {t.bakiye_usd !== 0 && (
+                          <div>
+                            <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1">
+                              {t.bakiye_usd > 0 ? 'BORCUNUZ (USD)' : t.bakiye_usd < 0 ? 'ALACAĞINIZ (USD)' : 'USD BAKİYE'}
+                            </p>
+                            <p className={`font-mono font-black text-base ${t.bakiye_usd > 0 ? 'text-red-600' : t.bakiye_usd < 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
+                              {Math.abs(t.bakiye_usd).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $
+                            </p>
+                          </div>
+                        )}
+                        {t.bakiye_eur !== 0 && (
+                          <div>
+                            <p className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1">
+                              {t.bakiye_eur > 0 ? 'BORCUNUZ (EUR)' : t.bakiye_eur < 0 ? 'ALACAĞINIZ (EUR)' : 'EUR BAKİYE'}
+                            </p>
+                            <p className={`font-mono font-black text-base ${t.bakiye_eur > 0 ? 'text-red-600' : t.bakiye_eur < 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
+                              {Math.abs(t.bakiye_eur).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
 

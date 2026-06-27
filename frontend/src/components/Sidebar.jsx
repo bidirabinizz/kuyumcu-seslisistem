@@ -1,9 +1,10 @@
-import { LayoutDashboard, Users, BarChart3, ShieldCheck, Package, Monitor, Settings2Icon, X, ExternalLink, Building2 } from 'lucide-react';
+import { LayoutDashboard, Users, BarChart3, ShieldCheck, Package, Monitor, Settings2Icon, X, ExternalLink, Building2, Notebook } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 
 const menu = [
   { icon: LayoutDashboard, label: 'Canlı İzleme',  path: '/' },
   { icon: Building2,       label: 'Toptancılar',   path: '/toptancilar' },
+  { icon: Notebook,        label: 'Müşteriler',    path: '/musteriler' },
   { icon: Users,           label: 'Personeller',   path: '/kullanicilar' },
   { icon: Package,         label: 'Ürünler',        path: '/urunler' },
   { icon: BarChart3,       label: 'Raporlar',       path: '/raporlar' },

@@ -8,7 +8,34 @@ const URUN_LABEL = {
   'CEYREK_ALTIN': 'Çeyrek', 'YARIM_ALTIN': 'Yarım', 'TAM_ALTIN': 'Tam', 'ATA_ALTIN': 'Ata',
   'PIRLANTA': 'Pırlanta'
 };
-import { API_BASE } from '../apiConfig';
+
+const cleanUrunName = (ayar) => {
+  if (!ayar) return '—';
+  const val = String(ayar).toUpperCase().trim();
+  if (URUN_LABEL[val]) return URUN_LABEL[val];
+  
+  const mappings = {
+    'USD': 'Dolar (USD)',
+    'EUR': 'Euro (EUR)',
+    'TRY': 'Türk Lirası (TRY)',
+    'CEYREK_ALTIN': 'Çeyrek Altın',
+    'YARIM_ALTIN': 'Yarım Altın',
+    'TAM_ALTIN': 'Tam Altın',
+    'ATA_ALTIN': 'Ata Altın',
+    'PIRLANTA': 'Pırlanta',
+  };
+  if (mappings[val]) return mappings[val];
+
+  return val.split('_').map(w => {
+    if (w === 'AYAR') return 'Ayar';
+    if (w === 'BILEZIK') return 'Bilezik';
+    if (w === 'KOLYE') return 'Kolye';
+    if (w === 'ALTIN') return 'Altın';
+    return w.charAt(0) + w.slice(1).toLowerCase();
+  }).join(' ');
+};
+
+import { API_BASE, WS_BASE } from '../apiConfig';
 
 // ─── Mini bar chart (saf SVG, kütüphane yok) ─────────────────────────────────
 const MiniBarChart = ({ data, renk }) => {
@@ -71,7 +98,7 @@ const DonutChart = ({ segments }) => {
           <div key={i} className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: renkHavuzu[i % renkHavuzu.length] }} />
-              <span className="text-xs text-ink-600 font-medium">{URUN_LABEL[seg.ayar] || seg.ayar}</span>
+              <span className="text-xs text-ink-600 font-medium">{cleanUrunName(seg.ayar)}</span>
             </div>
             <span className="text-xs font-bold font-mono text-ink-800">
               {total > 0 ? ((seg.deger / total) * 100).toFixed(1) : 0}%
@@ -153,6 +180,40 @@ export const Raporlar = () => {
 
   useEffect(() => {
     islemGetir();
+  }, [mode, startDate, endDate, customDays, tip, odemeTipi, personel]);
+
+  useEffect(() => {
+    let ws;
+    let retryTimeout;
+    
+    const connectWS = () => {
+      try {
+        ws = new WebSocket(WS_BASE);
+        ws.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.type === 'NEW_TX' || data.type === 'UNDO_TX' || data.type === 'UPDATE_TX') {
+              console.log('[WS] Canlı rapor güncellemesi tetiklendi.');
+              islemGetir();
+            }
+          } catch (err) {
+            console.error('[WS] Mesaj parse hatası:', err);
+          }
+        };
+        ws.onclose = () => {
+          retryTimeout = setTimeout(connectWS, 5000);
+        };
+      } catch (err) {
+        retryTimeout = setTimeout(connectWS, 5000);
+      }
+    };
+
+    connectWS();
+
+    return () => {
+      if (ws) ws.close();
+      if (retryTimeout) clearTimeout(retryTimeout);
+    };
   }, [mode, startDate, endDate, customDays, tip, odemeTipi, personel]);
 
   const exportPDF = () => {
@@ -362,7 +423,7 @@ export const Raporlar = () => {
                   </td>
                   <td className="px-5 py-3">
                     <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-gold-50 text-gold-700 border border-gold-100">
-                      {URUN_LABEL[r.ayar] || r.ayar}
+                      {cleanUrunName(r.ayar)}
                     </span>
                   </td>
                   {/* YENİ: Miktar dinamik (Adet veya gr) */}

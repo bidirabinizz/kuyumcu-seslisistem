@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { API_BASE, WS_BASE } from '../apiConfig';
 import { NumPad } from '../components/NumPad';
-import { ChevronLeft, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { ChevronLeft, CheckCircle2, Loader2, AlertCircle, X, Package, Tag, PackageOpen } from 'lucide-react';
 
 // ─── Renk sistemi (Urunler.jsx ile tutarlı, dark bg üzerine) ────────────────
 const TABLET_RENK = {
@@ -68,13 +68,48 @@ function PersonelSec({ onSec, personeller = [], loading = false }) {
 }
 
 // ─── Adım 2: İşlem Girişi ─────────────────────────────────────────────────────
-function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], loading = false }) {
+function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], urunStok = [], loading = false }) {
   const [secilenUrun, setSecilenUrun] = useState(null);
   const [islemTipi, setIslemTipi]   = useState('SATIS');
   const [odemeTipi, setOdemeTipi]   = useState('NAKIT');
   const [miktar, setMiktar]         = useState('');
   const [fiyat, setFiyat]           = useState('');
   const [aktifInput, setAktifInput] = useState('miktar'); // 'miktar' | 'fiyat'
+  const [seciliUrunStokId, setSeciliUrunStokId] = useState('');
+  const [seciliStokKodu, setSeciliStokKodu] = useState('');
+  const [showStokSecim, setShowStokSecim] = useState(false);
+
+  const selectProduct = (u) => {
+    setSecilenUrun(u);
+    if (u.stok_takibi && islemTipi === 'SATIS') {
+      setMiktar('');
+      setSeciliUrunStokId('');
+      setSeciliStokKodu('');
+      setAktifInput('fiyat');
+      setShowStokSecim(true);
+    } else {
+      setMiktar('');
+      setSeciliUrunStokId('');
+      setSeciliStokKodu('');
+      setAktifInput('miktar');
+    }
+  };
+
+  const selectIslemTipi = (t) => {
+    setIslemTipi(t);
+    if (t === 'SATIS' && secilenUrun?.stok_takibi) {
+      setMiktar('');
+      setSeciliUrunStokId('');
+      setSeciliStokKodu('');
+      setAktifInput('fiyat');
+      setShowStokSecim(true);
+    } else {
+      setMiktar('');
+      setSeciliUrunStokId('');
+      setSeciliStokKodu('');
+      setAktifInput('miktar');
+    }
+  };
 
   useEffect(() => {
     if (urunler.length > 0) {
@@ -92,21 +127,34 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
   }, [urunler]);
 
   const handleDevam = () => {
-    if (!secilenUrun || !miktar || parseFloat(miktar) <= 0) return;
+    const isStoklu = secilenUrun?.stok_takibi === true;
+    const miktarValue = isStoklu ? 1 : parseFloat(miktar);
+
+    if (!secilenUrun || (!isStoklu && (!miktar || miktarValue <= 0))) return;
+    if (isStoklu && islemTipi === 'SATIS' && !seciliUrunStokId) {
+      alert("Lütfen stok kodu seçin!");
+      return;
+    }
+
     onDevam({
       personel,
       urun: secilenUrun,
       islemTipi,
       odemeTipi,
-      miktar: parseFloat(miktar),
+      miktar: miktarValue,
       fiyat: parseFloat(fiyat) || 0,
+      urun_stok_id: isStoklu && islemTipi === 'SATIS' && seciliUrunStokId ? parseInt(seciliUrunStokId) : null
     });
   };
 
-  const devamAktif = secilenUrun && miktar && parseFloat(miktar) > 0;
+  const devamAktif = secilenUrun && (secilenUrun.stok_takibi === true ? (islemTipi === 'SATIS' ? seciliUrunStokId : true) : (miktar && parseFloat(miktar) > 0));
 
-  // Gruplama
+  // Gruplama (Favoriler en üste)
   const gruplar = urunler.reduce((acc, u) => {
+    if (u.favori) {
+      if (!acc["FAVORİLER"]) acc["FAVORİLER"] = [];
+      acc["FAVORİLER"].push(u);
+    }
     const k = u.urun_kategorisi;
     if (!acc[k]) acc[k] = [];
     acc[k].push(u);
@@ -114,10 +162,13 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
   }, {});
 
   // Dinamik kategori sıralaması ve etiketleri
-  const grupSirasi = kategoriler.length > 0
+  const baseSira = kategoriler.length > 0
     ? kategoriler.map(k => k.ad)
-    : Object.keys(gruplar);
+    : Object.keys(gruplar).filter(k => k !== "FAVORİLER");
+    
+  const grupSirasi = ["FAVORİLER", ...baseSira].filter(g => gruplar[g]);
   const grupEtiket = kategoriler.reduce((acc, k) => { acc[k.ad] = k.etiket; return acc; }, {});
+  grupEtiket["FAVORİLER"] = "⭐ Favoriler";
 
   return (
     <div className="flex flex-col h-full">
@@ -150,7 +201,7 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
             ].map(({ val, label, cls }) => (
               <button
                 key={val}
-                onClick={() => setIslemTipi(val)}
+                onClick={() => selectIslemTipi(val)}
                 className={`py-3.5 rounded-2xl border-2 font-black text-sm tracking-wide transition-all active:scale-95 ${cls}`}
               >
                 {label}
@@ -177,8 +228,9 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
                       return (
                         <button
                           key={u.id}
-                          onClick={() => setSecilenUrun(u)}
+                          onClick={() => selectProduct(u)}
                           className={`
+                            /* BUTON YÜKSEKLİĞİNİ BURADAN AYARLAYABİLİRSİNİZ (Örn: py-3.5 yerine h-20 veya py-5 yazabilirsiniz) */
                             py-3.5 px-3 rounded-2xl border-2 font-bold text-sm text-center
                             transition-all active:scale-95 leading-tight
                             ${renk(u.renk, aktif)}
@@ -188,11 +240,6 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
                           {u.milyem > 0 && (
                             <span className="block text-[10px] font-normal opacity-70 mt-0.5">
                               %{(u.milyem * 100).toFixed(1)} has
-                            </span>
-                          )}
-                          {u.milyem <= 0 && u.has_karsiligi > 0 && (
-                            <span className="block text-[10px] font-normal opacity-70 mt-0.5">
-                              {u.has_karsiligi.toFixed(4)} gr/adet
                             </span>
                           )}
                         </button>
@@ -217,23 +264,50 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
           {/* Miktar / Fiyat input göstergesi */}
           <div className="grid grid-cols-2 gap-2">
             {[
-              { key: 'miktar', label: secilenUrun?.islem_birimi === 'ADET' ? 'Adet' : 'Gram', val: miktar, setter: setMiktar },
-              { key: 'fiyat', label: 'Fiyat (₺)', val: fiyat, setter: setFiyat },
-            ].map(({ key, label, val }) => (
+              {
+                key: 'miktar',
+                label: secilenUrun?.stok_takibi === true && islemTipi === 'SATIS'
+                  ? 'Stok Kodu'
+                  : (secilenUrun?.islem_birimi === 'ADET' || secilenUrun?.stok_takibi === true ? 'Adet' : 'Gram'),
+                val: secilenUrun?.stok_takibi === true && islemTipi === 'SATIS'
+                  ? (seciliStokKodu || 'Seçiniz')
+                  : miktar,
+                onClick: () => {
+                  if (secilenUrun?.stok_takibi === true && islemTipi === 'SATIS') {
+                    setShowStokSecim(true);
+                  } else {
+                    setAktifInput('miktar');
+                  }
+                }
+              },
+              {
+                key: 'fiyat',
+                label: 'Fiyat (₺)',
+                val: fiyat,
+                onClick: () => setAktifInput('fiyat')
+              },
+            ].map(({ key, label, val, onClick }) => (
               <button
                 key={key}
-                onClick={() => setAktifInput(key)}
+                type="button"
+                onClick={onClick}
                 className={`relative px-3 py-2.5 rounded-2xl border-2 text-left transition-all ${
-                  aktifInput === key
+                  aktifInput === key && !(secilenUrun?.stok_takibi === true && islemTipi === 'SATIS' && key === 'miktar')
                     ? 'border-amber-400 bg-amber-400/10'
                     : 'border-white/10 bg-white/5'
+                } ${
+                  secilenUrun?.stok_takibi === true && islemTipi === 'SATIS' && key === 'miktar'
+                    ? 'border-amber-400/30 bg-amber-400/5'
+                    : ''
                 }`}
               >
                 <p className="text-gray-500 text-[10px] font-bold uppercase tracking-wide">{label}</p>
-                <p className={`font-black text-xl mt-0.5 ${val ? 'text-white' : 'text-gray-700'}`}>
+                <p className={`font-black text-lg mt-0.5 truncate ${
+                  (val && val !== 'Seçiniz') ? 'text-white' : 'text-gray-700'
+                }`}>
                   {val || '0'}
                 </p>
-                {aktifInput === key && (
+                {aktifInput === key && !(secilenUrun?.stok_takibi === true && islemTipi === 'SATIS' && key === 'miktar') && (
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-amber-400 animate-pulse" />
                 )}
               </button>
@@ -245,7 +319,7 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
             <NumPad
               value={aktifInput === 'miktar' ? miktar : fiyat}
               onChange={(v) => aktifInput === 'miktar' ? setMiktar(v) : setFiyat(v)}
-              decimal={aktifInput === 'miktar' ? secilenUrun?.islem_birimi !== 'ADET' : true}
+              decimal={aktifInput === 'miktar' ? secilenUrun?.islem_birimi !== 'ADET' && secilenUrun?.stok_takibi !== true : true}
             />
           </div>
 
@@ -282,6 +356,78 @@ function IslemGir({ personel, onGeri, onDevam, urunler = [], kategoriler = [], l
           </button>
         </div>
       </div>
+
+      {/* Stok Seçim Modalı */}
+      {showStokSecim && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-[#0b0f19] border border-white/10 rounded-3xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh] shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-5 border-b border-white/5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-amber-400/10 flex items-center justify-center text-amber-400">
+                  <Package size={20} />
+                </div>
+                <div>
+                  <h3 className="text-white font-bold text-base leading-tight">{secilenUrun?.ad}</h3>
+                  <p className="text-gray-500 text-xs mt-0.5">Lütfen satılacak stok kodunu seçin</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowStokSecim(false)}
+                className="text-gray-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1 space-y-2">
+              {(() => {
+                const stokListe = urunStok.filter(s => s.urun_id === secilenUrun?.id);
+                if (stokListe.length === 0) {
+                  return (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <PackageOpen size={48} className="text-gray-600 mb-3" />
+                      <p className="text-gray-400 text-sm font-semibold">Aktif Stok Bulunamadı</p>
+                      <p className="text-gray-600 text-xs mt-1 max-w-[200px]">Lütfen önce admin panelinden stok girişi yapın.</p>
+                    </div>
+                  );
+                }
+                return stokListe.map(s => {
+                  const kod = s.kod || `Stok #${s.id}`;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        setSeciliUrunStokId(s.id.toString());
+                        setSeciliStokKodu(kod);
+                        if (s.satis_fiyati) {
+                          setFiyat(s.satis_fiyati.toString());
+                        }
+                        setShowStokSecim(false);
+                      }}
+                      className="w-full flex items-center justify-between p-4 bg-white/5 hover:bg-amber-400/10 border border-white/5 hover:border-amber-400/30 rounded-2xl transition-all group text-left active:scale-[0.99]"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Tag size={16} className="text-gray-500 group-hover:text-amber-400 transition-colors" />
+                        <span className="text-white font-bold group-hover:text-amber-300 transition-colors">{kod}</span>
+                      </div>
+                      {s.satis_fiyati ? (
+                        <span className="px-3 py-1.5 bg-emerald-500/10 text-emerald-400 font-bold text-xs rounded-full border border-emerald-500/20">
+                          ₺{s.satis_fiyati.toLocaleString('tr-TR')}
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1.5 bg-gray-500/10 text-gray-400 font-medium text-[10px] rounded-full">
+                          Fiyatsız
+                        </span>
+                      )}
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -292,7 +438,7 @@ function IslemOnayla({ data, onGeri, onTamamlandi, kurlar }) {
   const [basarili, setBasarili] = useState(false);
   const [hata, setHata]         = useState('');
 
-  const { personel, urun, islemTipi, odemeTipi, miktar, fiyat } = data;
+  const { personel, urun, islemTipi, odemeTipi, miktar, fiyat, urun_stok_id } = data;
 
   // Has hesaplama önizlemesi
   let hasGoster = null;
@@ -345,6 +491,7 @@ function IslemOnayla({ data, onGeri, onTamamlandi, kurlar }) {
         urun_adi:                 urun.ad,
         doviz_tutar:              isDoviz ? miktar : (Math.round(computedDovizTutar * 100) / 100),
         doviz_kuru:               isDoviz ? (miktar > 0 ? (fiyat / miktar) : 1.0) : computedDovizKuru,
+        urun_stok_id:             urun_stok_id,
       };
       await axios.post(`${API_BASE}/islemler`, payload);
       setBasarili(true);
@@ -506,17 +653,20 @@ export default function KasaTablet() {
   const [urunler, setUrunler]         = useState([]);
   const [kategoriler, setKategoriler] = useState([]);
   const [personeller, setPersoneller] = useState([]);
+  const [urunStok, setUrunStok] = useState([]);
   const [loading, setLoading]         = useState(true);
 
   const yukleUrunlerVeKategoriler = useCallback(async () => {
     try {
-      const [urunRes, katRes] = await Promise.all([
+      const [urunRes, katRes, stokRes] = await Promise.all([
         axios.get(`${API_BASE}/urunler`),
         axios.get(`${API_BASE}/kategoriler`),
+        axios.get(`${API_BASE}/urun_stok?sadece_satilmamis=true`)
       ]);
       const mobilUrunler = urunRes.data.filter(u => u.mobil_aktif !== false);
       setUrunler(mobilUrunler);
       setKategoriler(katRes.data);
+      setUrunStok(stokRes.data);
     } catch (err) {
       console.error('KasaTablet ürünler/kategoriler yüklenemedi:', err);
     }
@@ -574,6 +724,8 @@ export default function KasaTablet() {
           if (data.type === 'REFRESH_URUNLER') {
             yukleUrunlerVeKategoriler();
           } else if (data.type === 'REFRESH_KATEGORILER') {
+            yukleUrunlerVeKategoriler();
+          } else if (data.type === 'REFRESH_URUN_STOK') {
             yukleUrunlerVeKategoriler();
           } else if (data.type === 'REFRESH_PERSONELLER') {
             yuklePersoneller();
@@ -643,6 +795,7 @@ export default function KasaTablet() {
             onDevam={handleDevam}
             urunler={urunler}
             kategoriler={kategoriler}
+            urunStok={urunStok}
             loading={loading}
           />
         )}

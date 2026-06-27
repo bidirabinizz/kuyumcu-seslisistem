@@ -16,6 +16,7 @@ import './index.css';
 
 import { Toptancilar }    from './pages/Toptancilar';
 import { ToptanciDetay }  from './pages/ToptanciDetay';
+import { Musteriler }     from './pages/Musteriler';
 import { Login }          from './pages/Login';
 
 function ProtectedAdminLayout({ children, mobileOpen, setMobileOpen }) {
@@ -91,6 +92,9 @@ export default function App() {
                 } />
                 <Route path="/toptancilar/:id" element={
                   <ErrorBoundary><ToptanciDetay /></ErrorBoundary>
+                } />
+                <Route path="/musteriler" element={
+                  <ErrorBoundary><Musteriler /></ErrorBoundary>
                 } />
                 <Route path="/kullanicilar" element={
                   <ErrorBoundary><Kullanicilar /></ErrorBoundary>

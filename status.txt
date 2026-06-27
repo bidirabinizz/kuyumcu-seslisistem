@@ -1,0 +1,39 @@
+● capar-backend.service - Capar Kuyumculuk FastAPI Backend
+     Loaded: loaded (/etc/systemd/system/capar-backend.service; enabled; preset: enabled)
+     Active: active (running) since Mon 2026-06-22 16:15:55 +03; 4min 54s ago
+   Main PID: 37605 (uvicorn)
+      Tasks: 4 (limit: 7025)
+     Memory: 53.6M (peak: 54.2M)
+        CPU: 2.537s
+     CGroup: /system.slice/capar-backend.service
+             └─37605 /var/www/caparkuyumculuk/backend/venv/bin/python3 /var/www/caparkuyumculuk/backend/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+
+Jun 22 16:15:55 87-76-130-180.verisunucu.net systemd[1]: Started capar-backend.service - Capar Kuyumculuk FastAPI Backend.
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Started server process [37605]
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Waiting for application startup.
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Application startup complete.
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: [DB] Tablolar başarıyla hazırlandı (urunler, toptancilar vb).
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: [UDP] Keşif servisi dinleniyor — port 55780
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: [KURLAR] Otomatik kur güncelleme servisi başlatıldı.
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     95.14.15.97:0 - "GET /piyasa/kurlar HTTP/1.1" 200 OK
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: INFO:     Waiting for application shutdown.
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: INFO:     Application shutdown complete.
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: INFO:     Finished server process [36845]
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: [KURLAR] Kurlar otomatik güncellendi - USD: 46.442, EUR: 53.145, Altın: 6330.86
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: [KURLAR] Kurlar otomatik güncellendi - USD: 46.442, EUR: 53.145, Altın: 6330.86
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: [KURLAR] Kurlar otomatik güncellendi - USD: 46.442, EUR: 53.145, Altın: 6330.86
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: [KURLAR] Kurlar otomatik güncellendi - USD: 46.442, EUR: 53.145, Altın: 6330.79
+Jun 22 16:15:55 87-76-130-180.verisunucu.net uvicorn[36845]: [KURLAR] Kurlar otomatik güncellendi - USD: 46.442, EUR: 53.145, Altın: 6330.79
+Jun 22 16:15:55 87-76-130-180.verisunucu.net systemd[1]: capar-backend.service: Deactivated successfully.
+Jun 22 16:15:55 87-76-130-180.verisunucu.net systemd[1]: Stopped capar-backend.service - Capar Kuyumculuk FastAPI Backend.
+Jun 22 16:15:55 87-76-130-180.verisunucu.net systemd[1]: capar-backend.service: Consumed 14.718s CPU time.
+Jun 22 16:15:55 87-76-130-180.verisunucu.net systemd[1]: Started capar-backend.service - Capar Kuyumculuk FastAPI Backend.
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Started server process [37605]
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Waiting for application startup.
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Application startup complete.
+Jun 22 16:15:56 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: [DB] Tablolar başarıyla hazırlandı (urunler, toptancilar vb).
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: [UDP] Keşif servisi dinleniyor — port 55780
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: [KURLAR] Otomatik kur güncelleme servisi başlatıldı.
+Jun 22 16:15:57 87-76-130-180.verisunucu.net uvicorn[37605]: INFO:     95.14.15.97:0 - "GET /piyasa/kurlar HTTP/1.1" 200 OK

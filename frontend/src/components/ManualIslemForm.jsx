@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { PlusCircle, User, Calculator, Tag, Wallet, Layers, CreditCard, Banknote } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../apiConfig';
+import { parseTrNumber } from '../utils/numberFormat';
 
 // Merkezi sarrafiye değerleri (backend SARRAFIYE_CONFIG ile tam uyumlu)
 const SARRAFIYE_HAS_MAP = {
@@ -68,7 +69,7 @@ export const ManualIslemForm = () => {
   // Sarrafiye has önizlemesi
   const hasOnizleme = (() => {
     if (formData.urun_kategorisi !== 'SARRAFIYE') return null;
-    const adet = parseFloat(formData.brut_miktar);
+    const adet = parseTrNumber(formData.brut_miktar);
     const has  = SARRAFIYE_HAS_MAP[formData.urun_cinsi];
     if (!adet || !has) return null;
     return (adet * has).toFixed(4);
@@ -99,7 +100,7 @@ export const ManualIslemForm = () => {
       const payload = {
         ...formData,
         personel_id: parseInt(formData.personel_id),
-        brut_miktar: parseFloat(formData.brut_miktar),
+        brut_miktar: parseTrNumber(formData.brut_miktar),
         birim_fiyat: Math.round(birimFiyatTL * 100) / 100, // DB expects total TL value in birim_fiyat
         islem_birimi: formData.urun_kategorisi === 'ALTIN' ? 'GRAM' : 'ADET',
         adet: formData.urun_kategorisi !== 'ALTIN' ? parseInt(formData.brut_miktar) : 1,
@@ -199,11 +200,11 @@ export const ManualIslemForm = () => {
               <Calculator size={14} /> Miktar ({formData.urun_kategorisi === 'ALTIN' ? 'Gram' : 'Adet'})
             </label>
             <input
-              type="number" step="0.01" required placeholder="0.00"
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-gold-400 outline-none"
-              value={formData.brut_miktar}
-              onChange={e => handleChange('brut_miktar', e.target.value)}
-            />
+                type="text" required placeholder="0,00"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-gold-400 outline-none"
+                value={formData.brut_miktar}
+                onChange={e => handleChange('brut_miktar', e.target.value)}
+              />
             {/* Sarrafiye has önizlemesi */}
             {hasOnizleme && (
               <p className="text-[11px] text-amber-600 font-semibold mt-1">

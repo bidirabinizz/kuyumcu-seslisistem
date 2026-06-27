@@ -4,6 +4,7 @@ import { ArrowLeft, Trash2, Calculator, CheckCircle2, Plus, ChevronDown, Chevron
 import { useMarket } from '../hooks/useMarket';
 import { InfoTooltip } from '../components/InfoTooltip';
 import { API_BASE } from '../apiConfig';
+import { parseTrNumber } from '../utils/numberFormat';
 
 const disabledCellBg = {
   background: 'repeating-linear-gradient(45deg, #fcfcfb, #fcfcfb 6px, #f6f5f1 6px, #f6f5f1 12px)'
@@ -15,10 +16,10 @@ const DETAY_SECENEKLERI = {
   "Ödeme": ["Nakit Ödeme", "Hurda Teslimi", "Has Altın Teslimi", "Banka Havalesi", "Kur Kesme / Fiksleme", "Diğer Ödeme"]
 };
 
-// Sanal Nakit/TL Ürünü (Ürün tablosunda olmayan, nakit ödemeler için sanal ürün)
+// Sanal Nakit Ürünü (Ürün tablosunda olmayan, nakit ödemeler için sanal ürün)
 const NAKIT_SANAL_URUN = {
   id: -99,
-  ad: 'Nakit/TL',
+  ad: 'Nakit',
   urun_cinsi: 'NAKIT_TL',
   urun_kategorisi: 'NAKIT',
   milyem: 0,
@@ -102,6 +103,7 @@ export const ToptanciDetay = () => {
   const [fikslemeMiktar, setFikslemeMiktar]       = useState('');
   const [fikslemeTutar, setFikslemeTutar]         = useState('');
   const [fikslemeParaBirimi, setFikslemeParaBirimi] = useState('TRY');
+  const [fikslemeHedefParaBirimi, setFikslemeHedefParaBirimi] = useState('USD');
   const [fikslemeGramFiyat, setFikslemeGramFiyat] = useState('');
   const [fikslemeDovizKuru, setFikslemeDovizKuru] = useState('');
 
@@ -303,8 +305,12 @@ export const ToptanciDetay = () => {
   // Çift sütun toplam hesapları
   const solHasSum = React.useMemo(() => solSayfaList.reduce((acc, i) => acc + Math.abs(i.has_altin), 0), [solSayfaList]);
   const solTlSum = React.useMemo(() => solSayfaList.reduce((acc, i) => acc + Math.abs(i.tl_tutar), 0), [solSayfaList]);
+  const solUsdSum = React.useMemo(() => solSayfaList.reduce((acc, i) => acc + Math.abs(i.usd_tutar || 0), 0), [solSayfaList]);
+  const solEurSum = React.useMemo(() => solSayfaList.reduce((acc, i) => acc + Math.abs(i.eur_tutar || 0), 0), [solSayfaList]);
   const sagHasSum = React.useMemo(() => sagSayfaList.reduce((acc, i) => acc + Math.abs(i.has_altin), 0), [sagSayfaList]);
   const sagTlSum = React.useMemo(() => sagSayfaList.reduce((acc, i) => acc + Math.abs(i.tl_tutar), 0), [sagSayfaList]);
+  const sagUsdSum = React.useMemo(() => sagSayfaList.reduce((acc, i) => acc + Math.abs(i.usd_tutar || 0), 0), [sagSayfaList]);
+  const sagEurSum = React.useMemo(() => sagSayfaList.reduce((acc, i) => acc + Math.abs(i.eur_tutar || 0), 0), [sagSayfaList]);
 
   // Tarih gruplamaları
   const groupedSolSayfa = React.useMemo(() => {
@@ -320,7 +326,9 @@ export const ToptanciDetay = () => {
         date,
         islemler: groups[date],
         hasSum: groups[date].reduce((acc, i) => acc + Math.abs(i.has_altin), 0),
-        tlSum: groups[date].reduce((acc, i) => acc + Math.abs(i.tl_tutar), 0)
+        tlSum: groups[date].reduce((acc, i) => acc + Math.abs(i.tl_tutar), 0),
+        usdSum: groups[date].reduce((acc, i) => acc + Math.abs(i.usd_tutar || 0), 0),
+        eurSum: groups[date].reduce((acc, i) => acc + Math.abs(i.eur_tutar || 0), 0)
       }));
   }, [solSayfaList]);
 
@@ -337,7 +345,9 @@ export const ToptanciDetay = () => {
         date,
         islemler: groups[date],
         hasSum: groups[date].reduce((acc, i) => acc + Math.abs(i.has_altin), 0),
-        tlSum: groups[date].reduce((acc, i) => acc + Math.abs(i.tl_tutar), 0)
+        tlSum: groups[date].reduce((acc, i) => acc + Math.abs(i.tl_tutar), 0),
+        usdSum: groups[date].reduce((acc, i) => acc + Math.abs(i.usd_tutar || 0), 0),
+        eurSum: groups[date].reduce((acc, i) => acc + Math.abs(i.eur_tutar || 0), 0)
       }));
   }, [sagSayfaList]);
 
@@ -354,16 +364,22 @@ export const ToptanciDetay = () => {
         const list = groups[date];
         let hasNet = 0;
         let tlNet = 0;
+        let usdNet = 0;
+        let eurNet = 0;
         list.forEach(i => {
           const isBorc = i.islem_tipi === 'Borçlanma';
           hasNet = isBorc ? hasNet + Math.abs(i.has_altin) : hasNet - Math.abs(i.has_altin);
           tlNet = isBorc ? tlNet + Math.abs(i.tl_tutar) : tlNet - Math.abs(i.tl_tutar);
+          usdNet = isBorc ? usdNet + Math.abs(i.usd_tutar || 0) : usdNet - Math.abs(i.usd_tutar || 0);
+          eurNet = isBorc ? eurNet + Math.abs(i.eur_tutar || 0) : eurNet - Math.abs(i.eur_tutar || 0);
         });
         return {
           date,
           islemler: list,
           hasNet,
-          tlNet
+          tlNet,
+          usdNet,
+          eurNet
         };
       });
   }, [filtreliIslemler]);
@@ -430,7 +446,7 @@ export const ToptanciDetay = () => {
         updated.adet = 1;
       } else {
         // ALTIN
-        updated.has_altin = updated.brut ? (parseFloat(updated.brut) * product.milyem).toFixed(3) : '';
+        updated.has_altin = parseTrNumber(updated.brut) ? (parseTrNumber(updated.brut) * product.milyem).toFixed(3) : '';
         updated.adet = 1;
       }
       
@@ -469,14 +485,14 @@ export const ToptanciDetay = () => {
         const defaultDetay = DETAY_SECENEKLERI[value][0];
         updated.islem_detayi = defaultDetay;
         if (defaultDetay.includes('Nakit') || defaultDetay.includes('Banka') || defaultDetay.includes('Havale')) {
-          updated.urun = 'Nakit/TL';
+          updated.urun = 'Nakit';
           updated.urun_kodu = 'NAKIT_TL';
           updated.urun_kategorisi = 'NAKIT';
           updated.milyem = 0;
           updated.has_altin = '';
           updated.brut = '';
           updated.adet = 1;
-        } else if (updated.urun === 'Nakit/TL') {
+        } else if (updated.urun === 'Nakit') {
           updated.urun = '22 Ayar';
           updated.urun_kodu = '22_AYAR';
           updated.urun_kategorisi = 'ALTIN';
@@ -487,14 +503,14 @@ export const ToptanciDetay = () => {
       // Detay manuel değişirse
       if (field === 'islem_detayi') {
         if (value.includes('Nakit') || value.includes('Banka') || value.includes('Havale')) {
-          updated.urun = 'Nakit/TL';
+          updated.urun = 'Nakit';
           updated.urun_kodu = 'NAKIT_TL';
           updated.urun_kategorisi = 'NAKIT';
           updated.milyem = 0;
           updated.has_altin = '';
           updated.brut = '';
           updated.adet = 1;
-        } else if (updated.urun === 'Nakit/TL') {
+        } else if (updated.urun === 'Nakit') {
           updated.urun = '22 Ayar';
           updated.urun_kodu = '22_AYAR';
           updated.urun_kategorisi = 'ALTIN';
@@ -510,7 +526,8 @@ export const ToptanciDetay = () => {
 
       // Brüt veya Milyem değiştiyse Has Altın hesapla
       if ((field === 'brut' || field === 'milyem') && updated.urun_kategorisi !== 'SARRAFIYE' && updated.urun_kategorisi !== 'NAKIT' && updated.urun_kategorisi !== 'PIRLANTA') {
-        const b = parseFloat(updated.brut) || 0;
+        const parsedBrut = field === 'brut' ? parseTrNumber(value) : parseTrNumber(updated.brut);
+        const b = parsedBrut !== null ? parsedBrut : 0;
         const m = parseFloat(updated.milyem) || 0;
         updated.has_altin = (b * m).toFixed(3);
       }
@@ -527,15 +544,15 @@ export const ToptanciDetay = () => {
           } else if (value === 'EUR') {
             updated.doviz_kuru = kurlar?.eur_try ? kurlar.eur_try.toString() : '';
           }
-          const dt = parseFloat(updated.doviz_tutar) || 0;
-          const dk = parseFloat(updated.doviz_kuru) || 0;
+          const dt = parseTrNumber(updated.doviz_tutar) || 0;
+          const dk = parseTrNumber(updated.doviz_kuru) || 0;
           updated.tl_tutar = dt && dk ? (dt * dk).toFixed(2) : '';
         }
       }
 
       if (field === 'doviz_tutar' || field === 'doviz_kuru') {
-        const dt = parseFloat(updated.doviz_tutar) || 0;
-        const dk = parseFloat(updated.doviz_kuru) || 0;
+        const dt = parseTrNumber(updated.doviz_tutar) || 0;
+        const dk = parseTrNumber(updated.doviz_kuru) || 0;
         updated.tl_tutar = dt && dk ? (dt * dk).toFixed(2) : '';
       }
 
@@ -568,17 +585,17 @@ export const ToptanciDetay = () => {
   };
 
   const handleCokluKaydet = async () => {
-    const gecerliKalemler = kalemler.filter(k => parseFloat(k.has_altin) > 0 || parseFloat(k.tl_tutar) > 0);
+    const gecerliKalemler = kalemler.filter(k => (parseTrNumber(k.has_altin) || 0) > 0 || (parseTrNumber(k.tl_tutar) || 0) > 0);
     if (gecerliKalemler.length === 0) return;
 
     try {
       const payloadKalemler = gecerliKalemler.map(k => {
         let ekDetay = '';
-        if (k.urun !== "Nakit/TL") {
+        if (k.urun !== "Nakit") {
           ekDetay += ` (${k.urun})`;
-          if (k.urun_kategorisi === 'SARRAFIYE' && parseFloat(k.adet) > 0) {
+          if (k.urun_kategorisi === 'SARRAFIYE' && (parseTrNumber(k.adet) || 0) > 0) {
             ekDetay += ` [${k.adet} Adet]`;
-          } else if (parseFloat(k.brut) > 0) {
+          } else if ((parseTrNumber(k.brut) || 0) > 0) {
             ekDetay += ` [Brüt: ${k.brut}gr | Mylm: ${k.milyem}]`;
           }
         }
@@ -587,11 +604,33 @@ export const ToptanciDetay = () => {
           ekDetay += ` [${k.doviz_tutar} ${k.para_birimi} @ ${k.doviz_kuru}]`;
         }
         
+        const isNakit = k.urun_kategorisi === 'NAKIT';
+        const isUSD = k.para_birimi === 'USD';
+        const isEUR = k.para_birimi === 'EUR';
+
+        let tlVal = 0;
+        let usdVal = 0;
+        let eurVal = 0;
+
+        if (isNakit) {
+          if (isUSD) {
+            usdVal = parseTrNumber(k.doviz_tutar) || 0;
+          } else if (isEUR) {
+            eurVal = parseTrNumber(k.doviz_tutar) || 0;
+          } else {
+            tlVal = parseTrNumber(k.tl_tutar) || 0;
+          }
+        } else {
+          tlVal = parseTrNumber(k.tl_tutar) || 0;
+        }
+
         return {
           islem_tipi: k.islem_tipi,
           islem_detayi: k.islem_detayi + ekDetay,
-          has_altin: parseFloat(k.has_altin) || 0,
-          tl_tutar: parseFloat(k.tl_tutar) || 0
+          has_altin: parseTrNumber(k.has_altin) || 0,
+          tl_tutar: tlVal,
+          usd_tutar: usdVal,
+          eur_tutar: eurVal
         };
       });
 
@@ -666,12 +705,12 @@ export const ToptanciDetay = () => {
 
   // Taslak Fatura Toplamları
   const totalHas = kalemler.reduce((acc, k) => {
-    const val = parseFloat(k.has_altin) || 0;
+    const val = parseTrNumber(k.has_altin) || 0;
     return k.islem_tipi === 'Borçlanma' ? acc + val : acc - val;
   }, 0);
 
   const totalTl = kalemler.reduce((acc, k) => {
-    const val = parseFloat(k.tl_tutar) || 0;
+    const val = parseTrNumber(k.tl_tutar) || 0;
     return k.islem_tipi === 'Borçlanma' ? acc + val : acc - val;
   }, 0);
 
@@ -707,6 +746,36 @@ export const ToptanciDetay = () => {
   const fiksTutarNum = parseFloat(fikslemeTutar) || 0;
   const fiksKurNum = parseFloat(fikslemeDovizKuru) || 1;
   const fiksTlValue = fikslemeParaBirimi === 'TRY' ? fiksTutarNum : fiksTutarNum * fiksKurNum;
+  
+  if (fikslemeYonu === 'PARA_TO_PARA') {
+      const isSourceDebt = fikslemeParaBirimi === 'TRY' ? ((t?.bakiye_tl ?? 0) >= 0) : fikslemeParaBirimi === 'USD' ? ((t?.bakiye_usd ?? 0) >= 0) : ((t?.bakiye_eur ?? 0) >= 0);
+      const islem1 = createEmptyRow();
+      islem1.islem_tipi = isSourceDebt ? 'Ödeme' : 'Borçlanma';
+      islem1.islem_detayi = "Döviz Çevrimi (Kaynak)";
+      islem1.urun = 'Nakit';
+      islem1.urun_kodu = fikslemeParaBirimi;
+      islem1.urun_kategorisi = 'NAKIT';
+      islem1.tl_tutar = fiksMiktarNum;
+      islem1.para_birimi = fikslemeParaBirimi;
+      islem1.doviz_tutar = fikslemeParaBirimi !== 'TRY' ? fiksMiktarNum : '';
+      islem1.doviz_kuru = fiksKurNum;
+      
+      const islem2 = createEmptyRow();
+      islem2.islem_tipi = isSourceDebt ? 'Borçlanma' : 'Ödeme';
+      islem2.islem_detayi = "Döviz Çevrimi (Hedef)";
+      islem2.urun = 'Nakit';
+      islem2.urun_kodu = fikslemeHedefParaBirimi;
+      islem2.urun_kategorisi = 'NAKIT';
+      islem2.tl_tutar = fiksTutarNum;
+      islem2.para_birimi = fikslemeHedefParaBirimi;
+      islem2.doviz_tutar = fikslemeHedefParaBirimi !== 'TRY' ? fiksTutarNum : '';
+      islem2.doviz_kuru = parseFloat(fikslemeGramFiyat) || 1; // parite
+      
+      const temizKalemler = kalemler.filter(k => (parseTrNumber(k.has_altin) || 0) > 0 || (parseTrNumber(k.tl_tutar) || 0) > 0);
+      setKalemler([...temizKalemler, islem1, islem2]);
+      setFikslemePanelAcik(false);
+      return;
+  }
 
   if (fikslemeYonu === 'ALTIN_TO_PARA') {
     // Converting Gold to Cash
@@ -791,7 +860,7 @@ export const ToptanciDetay = () => {
       </div>
 
       {/* Bakiyeler */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${t.bakiye_usd !== 0 && t.bakiye_eur !== 0 ? "lg:grid-cols-4" : (t.bakiye_usd !== 0 || t.bakiye_eur !== 0 ? "lg:grid-cols-3" : "lg:grid-cols-2")} gap-6 mb-8`}>
         <div className="relative bg-white border-l-4 border-l-gold-500 border border-ink-150 premium-shadow p-6 flex flex-col justify-center overflow-hidden group hover:border-l-gold-600 transition-all duration-300">
           <div className="absolute right-4 bottom-2 text-ink-100 opacity-20 pointer-events-none select-none group-hover:scale-110 transition-transform duration-300">
             <Calculator size={96} strokeWidth={1} />
@@ -815,7 +884,7 @@ export const ToptanciDetay = () => {
             )}
           </div>
           <p className={`font-mono text-4xl font-black tracking-tight ${t.bakiye_has > 0 ? 'text-rose-600' : t.bakiye_has < 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
-            {Math.abs(t.bakiye_has).toFixed(3)} <span className="text-lg font-sans font-bold text-ink-500">gr</span>
+            {Math.abs(t.bakiye_has).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-lg font-sans font-bold text-ink-500">gr</span>
           </p>
           <div className="mt-2 text-xs text-ink-400">
             {t.bakiye_has > 0 ? 'Toptancıya teslim etmeniz gereken net altın miktarı.' : t.bakiye_has < 0 ? 'Toptancıdan almanız gereken net altın miktarı.' : 'Altın hesabı dengelenmiş durumda.'}
@@ -851,6 +920,62 @@ export const ToptanciDetay = () => {
             {t.bakiye_tl > 0 ? 'Toptancıya ödemeniz gereken Türk Lirası tutarı.' : t.bakiye_tl < 0 ? 'Toptancıdan tahsil etmeniz gereken Türk Lirası tutarı.' : 'TL hesabı dengelenmiş durumda.'}
           </div>
         </div>
+
+        {t.bakiye_usd !== 0 && (
+          <div className="relative bg-white border-l-4 border-l-blue-500 border border-ink-150 premium-shadow p-6 flex flex-col justify-center overflow-hidden group hover:border-l-blue-600 transition-all duration-300">
+            <div className="absolute right-4 bottom-2 text-ink-100 opacity-20 pointer-events-none select-none group-hover:scale-110 transition-transform duration-300">
+              <span className="text-8xl font-black font-mono text-ink-200">$</span>
+            </div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-bold text-ink-400 uppercase tracking-widest flex items-center gap-1.5">
+                <span>💵</span> USD PARA BAKİYESİ
+              </h3>
+              {t.bakiye_usd > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-rose-600 font-bold text-[10px] bg-rose-50 px-2 py-0.5 border border-rose-100">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse"></span> BORCUNUZ VAR
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-emerald-600 font-bold text-[10px] bg-emerald-50 px-2 py-0.5 border border-emerald-100">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> ALACAĞINIZ VAR
+                </span>
+              )}
+            </div>
+            <p className={`font-mono text-4xl font-black tracking-tight ${t.bakiye_usd > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+              {Math.abs(t.bakiye_usd).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-lg font-sans font-bold text-ink-500">$</span>
+            </p>
+            <div className="mt-2 text-xs text-ink-400">
+              {t.bakiye_usd > 0 ? 'Toptancıya ödemeniz gereken Amerikan Doları tutarı.' : 'Toptancıdan tahsil etmeniz gereken Amerikan Doları tutarı.'}
+            </div>
+          </div>
+        )}
+
+        {t.bakiye_eur !== 0 && (
+          <div className="relative bg-white border-l-4 border-l-amber-500 border border-ink-150 premium-shadow p-6 flex flex-col justify-center overflow-hidden group hover:border-l-amber-600 transition-all duration-300">
+            <div className="absolute right-4 bottom-2 text-ink-100 opacity-20 pointer-events-none select-none group-hover:scale-110 transition-transform duration-300">
+              <span className="text-8xl font-black font-mono text-ink-200">€</span>
+            </div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-bold text-ink-400 uppercase tracking-widest flex items-center gap-1.5">
+                <span>💶</span> EUR PARA BAKİYESİ
+              </h3>
+              {t.bakiye_eur > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-rose-600 font-bold text-[10px] bg-rose-50 px-2 py-0.5 border border-rose-100">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse"></span> BORCUNUZ VAR
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-emerald-600 font-bold text-[10px] bg-emerald-50 px-2 py-0.5 border border-emerald-100">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> ALACAĞINIZ VAR
+                </span>
+              )}
+            </div>
+            <p className={`font-mono text-4xl font-black tracking-tight ${t.bakiye_eur > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+              {Math.abs(t.bakiye_eur).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-lg font-sans font-bold text-ink-500">€</span>
+            </p>
+            <div className="mt-2 text-xs text-ink-400">
+              {t.bakiye_eur > 0 ? 'Toptancıya ödemeniz gereken Euro tutarı.' : 'Toptancıdan tahsil etmeniz gereken Euro tutarı.'}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Kontrol ve Filtreleme Başlık Alanı */}
@@ -990,10 +1115,12 @@ export const ToptanciDetay = () => {
                                     {group.islemler.length} İşlem
                                   </span>
                                 </div>
-                                <div className="flex gap-4 text-xs font-mono font-black text-rose-700">
-                                  <span>{group.hasSum > 0 ? `+${group.hasSum.toFixed(3)} gr` : ''}</span>
-                                  <span>{group.tlSum > 0 ? `+${group.tlSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : ''}</span>
-                                </div>
+                                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs font-mono font-black text-rose-700">
+                                   <span>{group.hasSum > 0 ? `+${group.hasSum.toFixed(3)} gr` : ''}</span>
+                                   <span>{group.tlSum > 0 ? `+${group.tlSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : ''}</span>
+                                   {group.usdSum > 0 && <span>{`+${group.usdSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $`}</span>}
+                                   {group.eurSum > 0 && <span>{`+${group.eurSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €`}</span>}
+                                 </div>
                               </div>
                             </td>
                           </tr>
@@ -1037,7 +1164,13 @@ export const ToptanciDetay = () => {
                                     {islem.has_altin > 0 ? `+${islem.has_altin.toFixed(3)}` : '—'}
                                   </td>
                                   <td className="px-3 py-2.5 text-right font-mono font-black text-rose-600 whitespace-nowrap">
-                                    {islem.tl_tutar > 0 ? `+${islem.tl_tutar.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}` : '—'}
+                                    {islem.tl_tutar > 0 ? (
+                                      `+${islem.tl_tutar.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`
+                                    ) : islem.usd_tutar > 0 ? (
+                                      `+${islem.usd_tutar.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $`
+                                    ) : islem.eur_tutar > 0 ? (
+                                      `+${islem.eur_tutar.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €`
+                                    ) : '—'}
                                   </td>
                                   <td className="px-2 py-2.5 text-center">
                                     <button 
@@ -1076,11 +1209,13 @@ export const ToptanciDetay = () => {
             </div>
 
             {/* Sol Sayfa Toplamı */}
-            <div className="p-4 bg-rose-50/20 border-t border-rose-150 flex justify-between items-center text-xs">
+            <div className="p-4 bg-rose-50/20 border-t border-rose-150 flex flex-wrap justify-between items-center gap-2 text-xs">
               <span className="font-bold text-rose-800">SOL SAYFA TOPLAMI:</span>
-              <div className="flex gap-4 font-mono font-black text-rose-700">
+              <div className="flex flex-wrap gap-4 font-mono font-black text-rose-700">
                 <span>{solHasSum.toFixed(3)} gr Has</span>
                 <span>{solTlSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                {solUsdSum > 0 && <span>{solUsdSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $</span>}
+                {solEurSum > 0 && <span>{solEurSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €</span>}
               </div>
             </div>
           </div>
@@ -1104,7 +1239,7 @@ export const ToptanciDetay = () => {
                     <th className="px-3 py-3">Tarih</th>
                     <th className="px-3 py-3">İşlem & Detay</th>
                     <th className="px-3 py-3 text-right">Has Altın</th>
-                    <th className="px-3 py-3 text-right">TL Tutar</th>
+                    <th className="px-3 py-3 text-right">Tutar</th>
                     <th className="px-2 py-3 text-center w-8"></th>
                   </tr>
                 </thead>
@@ -1136,10 +1271,12 @@ export const ToptanciDetay = () => {
                                     {group.islemler.length} İşlem
                                   </span>
                                 </div>
-                                <div className="flex gap-4 text-xs font-mono font-black text-emerald-700">
-                                  <span>{group.hasSum > 0 ? `-${group.hasSum.toFixed(3)} gr` : ''}</span>
-                                  <span>{group.tlSum > 0 ? `-${group.tlSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : ''}</span>
-                                </div>
+                                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs font-mono font-black text-emerald-700">
+                                   <span>{group.hasSum > 0 ? `-${group.hasSum.toFixed(3)} gr` : ''}</span>
+                                   <span>{group.tlSum > 0 ? `-${group.tlSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺` : ''}</span>
+                                   {group.usdSum > 0 && <span>{`-${group.usdSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $`}</span>}
+                                   {group.eurSum > 0 && <span>{`-${group.eurSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €`}</span>}
+                                 </div>
                               </div>
                             </td>
                           </tr>
@@ -1183,7 +1320,13 @@ export const ToptanciDetay = () => {
                                     {islem.has_altin < 0 ? `-${Math.abs(islem.has_altin).toFixed(3)}` : '—'}
                                   </td>
                                   <td className="px-3 py-2.5 text-right font-mono font-black text-emerald-600 whitespace-nowrap">
-                                    {islem.tl_tutar < 0 ? `-${Math.abs(islem.tl_tutar).toLocaleString('tr-TR', { minimumFractionDigits: 2 })}` : '—'}
+                                    {islem.tl_tutar < 0 ? (
+                                      `-${Math.abs(islem.tl_tutar).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺`
+                                    ) : islem.usd_tutar < 0 ? (
+                                      `-${Math.abs(islem.usd_tutar).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $`
+                                    ) : islem.eur_tutar < 0 ? (
+                                      `-${Math.abs(islem.eur_tutar).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €`
+                                    ) : '—'}
                                   </td>
                                   <td className="px-2 py-2.5 text-center">
                                     <button 
@@ -1222,11 +1365,13 @@ export const ToptanciDetay = () => {
             </div>
 
             {/* Sağ Sayfa Toplamı */}
-            <div className="p-4 bg-emerald-50/20 border-t border-emerald-150 flex justify-between items-center text-xs">
+            <div className="p-4 bg-emerald-50/20 border-t border-emerald-150 flex flex-wrap justify-between items-center gap-2 text-xs">
               <span className="font-bold text-emerald-800">SAĞ SAYFA TOPLAMI:</span>
-              <div className="flex gap-4 font-mono font-black text-emerald-700">
+              <div className="flex flex-wrap gap-4 font-mono font-black text-emerald-700">
                 <span>-{sagHasSum.toFixed(3)} gr Has</span>
                 <span>-{sagTlSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺</span>
+                {sagUsdSum > 0 && <span>-{sagUsdSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $</span>}
+                {sagEurSum > 0 && <span>-{sagEurSum.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €</span>}
               </div>
             </div>
           </div>
@@ -1250,6 +1395,22 @@ export const ToptanciDetay = () => {
                   {((solTlSum - sagTlSum) > 0 ? '+' : '') + (solTlSum - sagTlSum).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                 </span>
               </div>
+              {(solUsdSum > 0 || sagUsdSum > 0) && (
+                <div className="flex flex-col items-end">
+                  <span className="text-[10px] text-ink-400 font-bold uppercase tracking-wide">Net USD Farkı</span>
+                  <span className={`text-xl font-mono font-black ${(solUsdSum - sagUsdSum) > 0 ? 'text-rose-400' : (solUsdSum - sagUsdSum) < 0 ? 'text-emerald-400' : 'text-white'}`}>
+                    {((solUsdSum - sagUsdSum) > 0 ? '+' : '') + (solUsdSum - sagUsdSum).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $
+                  </span>
+                </div>
+              )}
+              {(solEurSum > 0 || sagEurSum > 0) && (
+                <div className="flex flex-col items-end">
+                  <span className="text-[10px] text-ink-400 font-bold uppercase tracking-wide">Net EUR Farkı</span>
+                  <span className={`text-xl font-mono font-black ${(solEurSum - sagEurSum) > 0 ? 'text-rose-400' : (solEurSum - sagEurSum) < 0 ? 'text-emerald-400' : 'text-white'}`}>
+                    {((solEurSum - sagEurSum) > 0 ? '+' : '') + (solEurSum - sagEurSum).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €
+                  </span>
+                </div>
+              )}
             </div>
           </div>
           
@@ -1298,13 +1459,23 @@ export const ToptanciDetay = () => {
                                   {group.islemler.length} İşlem
                                 </span>
                               </div>
-                              <div className="flex gap-6 text-xs font-mono font-bold">
+                              <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs font-mono font-bold">
                                 <span className={group.hasNet > 0 ? 'text-rose-600' : group.hasNet < 0 ? 'text-emerald-600' : 'text-ink-500'}>
                                   Net Has: {group.hasNet > 0 ? '+' : ''}{group.hasNet.toFixed(3)} gr
                                 </span>
                                 <span className={group.tlNet > 0 ? 'text-rose-600' : group.tlNet < 0 ? 'text-emerald-600' : 'text-ink-500'}>
                                   Net TL: {group.tlNet > 0 ? '+' : ''}{group.tlNet.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                                 </span>
+                                {group.usdNet !== 0 && (
+                                  <span className={group.usdNet > 0 ? 'text-rose-600' : group.usdNet < 0 ? 'text-emerald-600' : 'text-ink-500'}>
+                                    Net USD: {group.usdNet > 0 ? '+' : ''}{group.usdNet.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} $
+                                  </span>
+                                )}
+                                {group.eurNet !== 0 && (
+                                  <span className={group.eurNet > 0 ? 'text-rose-600' : group.eurNet < 0 ? 'text-emerald-600' : 'text-ink-500'}>
+                                    Net EUR: {group.eurNet > 0 ? '+' : ''}{group.eurNet.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} €
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </td>
@@ -1370,6 +1541,14 @@ export const ToptanciDetay = () => {
                                   {islem.tl_tutar > 0 ? (
                                     <span className={`font-mono font-bold text-sm ${isBorc ? 'text-rose-600' : 'text-emerald-600'}`}>
                                       {isBorc ? '+' : '-'}{islem.tl_tutar.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[10px] text-ink-400 font-sans">₺</span>
+                                    </span>
+                                  ) : islem.usd_tutar > 0 ? (
+                                    <span className={`font-mono font-bold text-sm ${isBorc ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                      {isBorc ? '+' : '-'}{islem.usd_tutar.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[10px] text-ink-400 font-sans">$</span>
+                                    </span>
+                                  ) : islem.eur_tutar > 0 ? (
+                                    <span className={`font-mono font-bold text-sm ${isBorc ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                      {isBorc ? '+' : '-'}{islem.eur_tutar.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[10px] text-ink-400 font-sans">€</span>
                                     </span>
                                   ) : (
                                     <span className="font-mono text-xs text-ink-300">—</span>
@@ -1551,7 +1730,7 @@ export const ToptanciDetay = () => {
                   <div>
                     <label className="block text-[10px] font-bold text-amber-800 uppercase mb-1 flex items-center">
                       İşlem Yönü
-                      <InfoTooltip text={fikslemeYonu === 'ALTIN_TO_PARA' ? 'Altın borcunuzu sabitleyerek para borcuna çevirir (Altın borcunuz azalırken, para borcunuz artar).' : 'Para borcunuzu sabitleyerek altın borcuna çevirir (Para borcunuz azalırken, altın borcunuz artar).'} position="bottom" />
+                      <InfoTooltip text={fikslemeYonu === 'ALTIN_TO_PARA' ? 'Altın borcunuzu sabitleyerek para borcuna çevirir.' : fikslemeYonu === 'PARA_TO_ALTIN' ? 'Para borcunuzu sabitleyerek altın borcuna çevirir.' : 'TL/Döviz borcunuzu başka bir döviz cinsine çevirir.'} position="bottom" />
                     </label>
                     <select
                       className="w-full h-9 px-2 text-xs font-bold bg-white border border-amber-300 rounded outline-none focus:ring-1 focus:ring-amber-500"
@@ -1633,11 +1812,15 @@ export const ToptanciDetay = () => {
                               setFikslemeTutar(gf > 0 ? (bakiyeHas * gf).toFixed(2) : '');
                             }
                           } else {
-                            const bakiyeTL = t?.bakiye_tl ? Math.abs(t.bakiye_tl) : 0;
-                            if (gfTL > 0 && bakiyeTL > 0) {
-                              const miktarVal = bakiyeTL / gfTL;
+                            let bakiyeCash = 0;
+                            if (fikslemeParaBirimi === 'TRY') bakiyeCash = t?.bakiye_tl ? Math.abs(t.bakiye_tl) : 0;
+                            else if (fikslemeParaBirimi === 'USD') bakiyeCash = t?.bakiye_usd ? Math.abs(t.bakiye_usd) : 0;
+                            else if (fikslemeParaBirimi === 'EUR') bakiyeCash = t?.bakiye_eur ? Math.abs(t.bakiye_eur) : 0;
+                            
+                            if (gfTL > 0 && bakiyeCash > 0) {
+                              const miktarVal = bakiyeCash / gfTL;
                               setFikslemeMiktar(miktarVal.toFixed(3));
-                              setFikslemeTutar((bakiyeTL / kur).toFixed(2));
+                              setFikslemeTutar((bakiyeCash / kur).toFixed(2));
                             }
                           }
                         }}
@@ -1649,7 +1832,7 @@ export const ToptanciDetay = () => {
                     </div>
                   </div>
 
-                  {/* 2. Tutar (Para) */}
+                  {/* 2. {fikslemeYonu === 'PARA_TO_PARA' ? 'Hedef Tutar' : 'Tutar (Para)'} */}
                   <div>
                     <label className="block text-[10px] font-bold text-amber-800 uppercase mb-1 flex items-center">
                       Tutar ({fikslemeParaBirimi})
@@ -1696,11 +1879,15 @@ export const ToptanciDetay = () => {
                               setFikslemeTutar(gf > 0 ? (bakiyeHas * gf).toFixed(2) : '');
                             }
                           } else {
-                            const bakiyeTL = t?.bakiye_tl ? Math.abs(t.bakiye_tl) : 0;
-                            if (gfTL > 0 && bakiyeTL > 0) {
-                              const miktarVal = bakiyeTL / gfTL;
+                            let bakiyeCash = 0;
+                            if (fikslemeParaBirimi === 'TRY') bakiyeCash = t?.bakiye_tl ? Math.abs(t.bakiye_tl) : 0;
+                            else if (fikslemeParaBirimi === 'USD') bakiyeCash = t?.bakiye_usd ? Math.abs(t.bakiye_usd) : 0;
+                            else if (fikslemeParaBirimi === 'EUR') bakiyeCash = t?.bakiye_eur ? Math.abs(t.bakiye_eur) : 0;
+                            
+                            if (gfTL > 0 && bakiyeCash > 0) {
+                              const miktarVal = bakiyeCash / gfTL;
                               setFikslemeMiktar(miktarVal.toFixed(3));
-                              setFikslemeTutar((bakiyeTL / kur).toFixed(2));
+                              setFikslemeTutar((bakiyeCash / kur).toFixed(2));
                             }
                           }
                         }}
@@ -1749,12 +1936,16 @@ export const ToptanciDetay = () => {
                         const newKur = val === 'TRY' ? 1 : (parseFloat(newDovizKuru) || 1);
                         
                         if (fikslemeYonu === 'PARA_TO_ALTIN') {
-                          const bakiyeTL = t?.bakiye_tl ? Math.abs(t.bakiye_tl) : 0;
+                          let bakiyeCash = 0;
+                          if (val === 'TRY') bakiyeCash = t?.bakiye_tl ? Math.abs(t.bakiye_tl) : 0;
+                          else if (val === 'USD') bakiyeCash = t?.bakiye_usd ? Math.abs(t.bakiye_usd) : 0;
+                          else if (val === 'EUR') bakiyeCash = t?.bakiye_eur ? Math.abs(t.bakiye_eur) : 0;
+                          
                           const gfTL = gf * newKur;
-                          if (gfTL > 0 && bakiyeTL > 0) {
-                            const miktarVal = bakiyeTL / gfTL;
+                          if (gfTL > 0 && bakiyeCash > 0) {
+                            const miktarVal = bakiyeCash / gfTL;
                             setFikslemeMiktar(miktarVal.toFixed(3));
-                            setFikslemeTutar((bakiyeTL / newKur).toFixed(2));
+                            setFikslemeTutar((bakiyeCash / newKur).toFixed(2));
                           } else {
                             setFikslemeMiktar('');
                             setFikslemeTutar('');
@@ -1776,10 +1967,26 @@ export const ToptanciDetay = () => {
                     </select>
                   </div>
 
-                  {/* 4. Gram Fiyatı */}
+                  {fikslemeYonu === 'PARA_TO_PARA' && (
+                      <div>
+                        <label className="block text-[10px] font-bold text-ink-500 uppercase mb-1 flex items-center">
+                          Hedef Döviz
+                        </label>
+                        <select
+                          className="w-full h-9 px-2 text-xs font-bold bg-white border border-ink-200 rounded outline-none focus:ring-1 focus:ring-gold-500"
+                          value={fikslemeHedefParaBirimi}
+                          onChange={(e) => setFikslemeHedefParaBirimi(e.target.value)}
+                        >
+                          <option value="TRY">TRY ₺</option>
+                          <option value="USD">USD $</option>
+                          <option value="EUR">EUR €</option>
+                        </select>
+                      </div>
+                    )}
+                    {/* 4. {fikslemeYonu === 'PARA_TO_PARA' ? 'Parite / Kur' : 'Gram Fiyatı'} */}
                   <div>
                     <label className="block text-[10px] font-bold text-amber-800 uppercase mb-1 flex items-center">
-                      Gram Fiyatı ({fikslemeParaBirimi})
+                      {fikslemeYonu === 'PARA_TO_PARA' ? 'Parite / Kur' : 'Gram Fiyatı'} ({fikslemeParaBirimi})
                       <InfoTooltip text="Çevrimde kullanılacak 1 gram Has Altının fiyatı." position="bottom" />
                     </label>
                     <input
@@ -1796,9 +2003,12 @@ export const ToptanciDetay = () => {
                           if (fikslemeYonu === 'ALTIN_TO_PARA') {
                             const mVal = parseFloat(fikslemeMiktar) || 0;
                             setFikslemeTutar(mVal > 0 ? (mVal * newGF).toFixed(2) : '');
-                          } else {
+                          } else if (fikslemeYonu === 'PARA_TO_ALTIN') {
                             const tVal = parseFloat(fikslemeTutar) || 0;
                             setFikslemeMiktar(tVal > 0 ? (tVal / newGF).toFixed(3) : '');
+                          } else if (fikslemeYonu === 'PARA_TO_PARA') {
+                            const mVal = parseFloat(fikslemeMiktar) || 0;
+                            setFikslemeTutar(mVal > 0 ? (mVal * newGF).toFixed(2) : '');
                           }
                         }
                       }}
@@ -1810,7 +2020,7 @@ export const ToptanciDetay = () => {
                     {fikslemeParaBirimi !== 'TRY' ? (
                       <>
                         <label className="block text-[10px] font-bold text-amber-800 uppercase mb-1 flex items-center">
-                          Döviz Kuru (TL)
+                          {fikslemeYonu === 'PARA_TO_PARA' ? 'İşlem Kuru (Opsiyonel)' : 'Döviz Kuru (TL)'}
                           <InfoTooltip text="Hedef döviz biriminin (USD/EUR) Türk Lirası karşılığı olan işlem kuru." position="bottom" />
                         </label>
                         <input
@@ -1867,7 +2077,11 @@ export const ToptanciDetay = () => {
                         goldIslemTipi = isGoldDebt ? 'Ödeme' : 'Borçlanma';
                         cashIslemTipi = isGoldDebt ? 'Borçlanma' : 'Ödeme';
                       } else {
-                        const isCashDebt = (t?.bakiye_tl ?? 0) >= 0;
+                        let isCashDebt = false;
+                        if (fikslemeParaBirimi === 'TRY') isCashDebt = (t?.bakiye_tl ?? 0) >= 0;
+                        else if (fikslemeParaBirimi === 'USD') isCashDebt = (t?.bakiye_usd ?? 0) >= 0;
+                        else if (fikslemeParaBirimi === 'EUR') isCashDebt = (t?.bakiye_eur ?? 0) >= 0;
+                        
                         cashIslemTipi = isCashDebt ? 'Ödeme' : 'Borçlanma';
                         goldIslemTipi = isCashDebt ? 'Borçlanma' : 'Ödeme';
                       }
@@ -1900,7 +2114,7 @@ export const ToptanciDetay = () => {
                         id: Date.now() + Math.random(),
                         islem_tipi: cashIslemTipi,
                         islem_detayi: islemAciklamasi,
-                        urun: 'Nakit/TL',
+                        urun: 'Nakit',
                         urun_kodu: 'NAKIT_TL',
                         urun_kategorisi: 'NAKIT',
                         adet: 1,
@@ -1997,7 +2211,7 @@ export const ToptanciDetay = () => {
                     {kalemler.map((kalem, index) => {
                       const isBorc = kalem.islem_tipi === 'Borçlanma';
                       const isSarrafiye = kalem.urun_kategorisi === 'SARRAFIYE';
-                      const isNakit = kalem.urun_kategorisi === 'NAKIT';
+                      const isNakit = kalem.urun_kategorisi === 'NAKIT' || kalem.urun_kategorisi === 'DÖVİZ' || kalem.urun_kategorisi === 'DOVIZ';
                       const isPirlanta = kalem.urun_kategorisi === 'PIRLANTA';
                       
                       return (
@@ -2059,7 +2273,7 @@ export const ToptanciDetay = () => {
                               className="w-full h-11 px-3 text-left font-bold text-xs text-ink-900 hover:bg-gold-50/10 flex items-center justify-between transition-colors outline-none focus:ring-1 focus:ring-gold-500/30"
                             >
                               <span className={isNakit ? 'text-emerald-700 font-black' : 'text-ink-900 font-bold'}>
-                                {isNakit ? '💸 Nakit/TL' : kalem.urun}
+                                {isNakit ? '💸 Nakit' : kalem.urun}
                               </span>
                               <span className="text-[9px] bg-ink-100 hover:bg-gold-100 border border-ink-250 px-1.5 py-0.5 text-ink-500 hover:text-gold-700 transition-colors uppercase font-mono">Seç 🔍</span>
                             </button>
@@ -2085,12 +2299,11 @@ export const ToptanciDetay = () => {
                           <td className="p-0 border-r border-ink-150" style={(isSarrafiye || isNakit || isPirlanta) ? disabledCellBg : {}}>
                             {(!isSarrafiye && !isNakit && !isPirlanta) ? (
                               <input
-                                type="number"
-                                step="0.01"
-                                placeholder="0.00"
-                                className="w-full h-11 px-2.5 text-right font-mono text-sm bg-transparent border-none outline-none focus:bg-white focus:ring-1 focus:ring-gold-500/20 transition-all"
-                                value={kalem.brut}
-                                onChange={(e) => updateKalem(kalem.id, 'brut', e.target.value)}
+                                  type="text"
+                                  placeholder="0,00"
+                                  className="w-full h-11 px-2.5 text-right font-mono text-sm bg-transparent border-none outline-none focus:bg-white focus:ring-1 focus:ring-gold-500/20 transition-all"
+                                  value={kalem.brut}
+                                  onChange={(e) => updateKalem(kalem.id, 'brut', e.target.value)}
                                 onKeyDown={(e) => handleInputKeyDown(e, index, 'brut')}
                               />
                             ) : (
@@ -2141,16 +2354,15 @@ export const ToptanciDetay = () => {
                                   onChange={(e) => updateKalem(kalem.id, 'para_birimi', e.target.value)}
                                   className="h-8 bg-transparent text-xs font-bold text-ink-600 outline-none cursor-pointer border-r border-ink-200 pr-1 shrink-0"
                                 >
-                                  <option value="TRY">₺</option>
-                                  <option value="USD">$</option>
-                                  <option value="EUR">€</option>
+                                  <option value="TRY">₺ Türk Lirası</option>
+                                  <option value="USD">$ Amerikan Doları</option>
+                                  <option value="EUR">€ Euro</option>
                                 </select>
                                 
                                 {kalem.para_birimi && kalem.para_birimi !== 'TRY' ? (
                                   <>
                                     <input
-                                      type="number"
-                                      step="0.01"
+                                      type="text"
                                       placeholder="Tutar"
                                       className="w-20 h-8 text-right font-mono font-bold text-xs text-ink-800 bg-ink-50/50 border border-ink-200 px-1.5 outline-none rounded focus:border-gold-500"
                                       value={kalem.doviz_tutar || ''}
@@ -2159,8 +2371,7 @@ export const ToptanciDetay = () => {
                                     />
                                     <span className="text-[10px] text-ink-400 font-bold select-none">@</span>
                                     <input
-                                      type="number"
-                                      step="0.0001"
+                                      type="text"
                                       placeholder="Kur"
                                       className="w-16 h-8 text-right font-mono text-xs text-ink-500 bg-ink-50/50 border border-ink-200 px-1 outline-none rounded focus:border-gold-500"
                                       value={kalem.doviz_kuru || ''}
@@ -2170,8 +2381,7 @@ export const ToptanciDetay = () => {
                                   </>
                                 ) : (
                                   <input
-                                    type="number"
-                                    step="0.01"
+                                    type="text"
                                     placeholder="0.00"
                                     className="w-full h-8 text-right font-mono font-black text-sm text-emerald-600 bg-transparent border-none outline-none focus:bg-white"
                                     value={kalem.tl_tutar}
@@ -2182,7 +2392,7 @@ export const ToptanciDetay = () => {
                               </div>
                               {kalem.para_birimi && kalem.para_birimi !== 'TRY' && kalem.tl_tutar && (
                                 <div className="text-[10px] text-right text-emerald-600 font-mono font-bold select-none">
-                                  {parseFloat(kalem.tl_tutar).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
+                                  {(parseTrNumber(kalem.tl_tutar) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2 })} ₺
                                 </div>
                               )}
                             </div>
